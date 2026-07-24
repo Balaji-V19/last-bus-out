@@ -1044,7 +1044,6 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   const cabinets = [
     medicalCabinet(materials, -7.72, -18, Math.PI / 2),
     medicalCabinet(materials, 7.72, -41, -Math.PI / 2),
-    medicalCabinet(materials, -7.72, -80, Math.PI / 2),
   ];
   for (const cabinet of cabinets) root.add(cabinet);
 
@@ -1148,7 +1147,8 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   }
 
   const exitSign = textPanel("AMBULANCE EXIT", "#d9eadb", "rgba(28,74,54,.96)");
-  exitSign.position.set(0, 3.5, -90.78);
+  exitSign.position.set(0, 4.12, -90.5);
+  exitSign.scale.set(1.15, 1.15, 1);
   root.add(exitSign);
   const exitDoorMaterial = new THREE.MeshStandardMaterial({
     color: 0x2c4d3e,

@@ -34,8 +34,7 @@ type MusicChapter =
 
 type MusicRig = {
   chapter: MusicChapter;
-  gain: GainNode;
-  sources: AudioScheduledSourceNode[];
+  audio: HTMLAudioElement;
 };
 
 function getAudioContextConstructor(): AudioContextConstructor | null {
@@ -69,6 +68,9 @@ export class SurvivalAudio {
         this.context.currentTime,
         0.018,
       );
+    }
+    if (this.music) {
+      this.music.audio.muted = !enabled;
     }
   }
 
@@ -188,129 +190,44 @@ export class SurvivalAudio {
   }
 
   startMusic(chapter: MusicChapter, intensity = 0.55) {
-    const context = this.ensureContext();
-    if (!context) return;
-    const targetGain = 0.026 + clamp(intensity, 0, 1) * 0.028;
-    if (this.music?.chapter === chapter) {
-      this.music.gain.gain.setTargetAtTime(
-        targetGain,
-        context.currentTime,
-        0.35,
-      );
+    if (!this.enabled || typeof window === "undefined") return;
+    const targetVolume = 0.14 + clamp(intensity, 0, 1) * 0.08;
+    if (this.music) {
+      this.music.chapter = chapter;
+      this.music.audio.volume = targetVolume;
+      this.music.audio.muted = false;
+      if (this.music.audio.paused) {
+        void this.music.audio.play().catch(() => {
+          // A later player input retries playback after browser autoplay blocking.
+        });
+      }
       return;
     }
 
-    this.stopMusic();
-    const now = context.currentTime;
-    const tonic: Record<MusicChapter, number> = {
-      hospital: 43.65,
-      street: 46.25,
-      station: 41.2,
-      escape: 49,
-      survival: 36.71,
-    };
-    const tempo: Record<MusicChapter, number> = {
-      hospital: 0.72,
-      street: 0.88,
-      station: 1.12,
-      escape: 1.38,
-      survival: 1.68,
-    };
-    const base = tonic[chapter];
-    const musicGain = context.createGain();
-    musicGain.gain.setValueAtTime(0.0001, now);
-    musicGain.gain.exponentialRampToValueAtTime(targetGain, now + 1.8);
-    musicGain.connect(this.master!);
-
-    const droneFilter = context.createBiquadFilter();
-    droneFilter.type = "lowpass";
-    droneFilter.frequency.value = chapter === "hospital" ? 310 : 430;
-    droneFilter.Q.value = 1.8;
-    droneFilter.connect(musicGain);
-
-    const sources: AudioScheduledSourceNode[] = [];
-    const addDrone = (
-      frequency: number,
-      type: OscillatorType,
-      volume: number,
-      detune = 0,
-    ) => {
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = type;
-      oscillator.frequency.value = frequency;
-      oscillator.detune.value = detune;
-      gain.gain.value = volume;
-      oscillator.connect(gain);
-      gain.connect(droneFilter);
-      oscillator.start(now);
-      sources.push(oscillator);
-    };
-    addDrone(base, "sawtooth", 0.34, -6);
-    addDrone(base * 1.006, "triangle", 0.26, 5);
-    addDrone(base / 2, "sine", 0.48);
-    addDrone(base * 1.5, "sine", 0.09, -9);
-
-    const bed = context.createBufferSource();
-    const bedFilter = context.createBiquadFilter();
-    const bedGain = context.createGain();
-    bed.buffer = this.getNoise(context);
-    bed.loop = true;
-    bed.playbackRate.value = 0.18;
-    bedFilter.type = "bandpass";
-    bedFilter.frequency.value = chapter === "hospital" ? 620 : 820;
-    bedFilter.Q.value = 0.42;
-    bedGain.gain.value = chapter === "hospital" ? 0.11 : 0.075;
-    bed.connect(bedFilter);
-    bedFilter.connect(bedGain);
-    bedGain.connect(musicGain);
-    bed.start(now, Math.random() * 0.6);
-    sources.push(bed);
-
-    const pulse = context.createOscillator();
-    const pulseDepth = context.createGain();
-    pulse.type = "sine";
-    pulse.frequency.value = tempo[chapter];
-    pulseDepth.gain.value = targetGain * 0.32;
-    pulse.connect(pulseDepth);
-    pulseDepth.connect(musicGain.gain);
-    pulse.start(now);
-    sources.push(pulse);
-
-    const filterMotion = context.createOscillator();
-    const filterDepth = context.createGain();
-    filterMotion.type = "sine";
-    filterMotion.frequency.value = tempo[chapter] / 5;
-    filterDepth.gain.value = chapter === "hospital" ? 125 : 210;
-    filterMotion.connect(filterDepth);
-    filterDepth.connect(droneFilter.frequency);
-    filterMotion.start(now);
-    sources.push(filterMotion);
-
-    this.music = { chapter, gain: musicGain, sources };
+    const audio = new Audio("/audio/creepy-thriller-loop.ogg");
+    audio.loop = true;
+    audio.preload = "auto";
+    audio.volume = targetVolume;
+    this.music = { chapter, audio };
+    void audio.play().catch(() => {
+      // Browsers may wait for the first gameplay input before starting media.
+    });
   }
 
   stopMusic() {
-    if (!this.music || !this.context) return;
-    const now = this.context.currentTime;
-    this.music.gain.gain.cancelScheduledValues(now);
-    this.music.gain.gain.setValueAtTime(
-      Math.max(0.0001, this.music.gain.gain.value),
-      now,
-    );
-    this.music.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
-    for (const source of this.music.sources) {
-      try {
-        source.stop(now + 0.62);
-      } catch {
-        // A source can already be stopped while changing chapters quickly.
-      }
-    }
+    if (!this.music) return;
+    this.music.audio.pause();
+    this.music.audio.currentTime = 0;
     this.music = null;
   }
 
   play(event: GameSoundEvent, options: GameSoundOptions = {}) {
     if (!this.enabled) return;
+    if (this.music?.audio.paused) {
+      void this.music.audio.play().catch(() => {
+        // Keep sound effects available even if media playback remains blocked.
+      });
+    }
     const now = performance.now();
     const minimumGap =
       event === "footstep"
