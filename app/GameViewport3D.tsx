@@ -35,6 +35,8 @@ type GameViewportProps = {
   mode: "menu" | "playing" | "paused" | "ending";
   step: number;
   rescued: boolean;
+  health: number;
+  ammo: number;
   inventory: Inventory;
   resetToken: number;
   onInteraction: (id: string) => void;
@@ -42,6 +44,8 @@ type GameViewportProps = {
   onStaminaChange: (value: number) => void;
   onDamage: (amount: number) => void;
   onKill: () => void;
+  onAmmoUsed: () => void;
+  onCombatProgress: (combo: number, score: number) => void;
   onEncounterCleared: () => void;
   onFuelProgress: (value: number) => void;
   onEscapeProgress: (value: number) => void;
@@ -55,6 +59,7 @@ type GameViewportProps = {
 
 export type GameViewportHandle = {
   attack: () => void;
+  shoot: () => void;
   dodge: () => void;
   interact: () => void;
   setMove: (
@@ -92,6 +97,12 @@ type CompanionActor = {
 type BloodParticle = {
   mesh: THREE.Mesh;
   velocity: THREE.Vector3;
+  life: number;
+};
+
+type ShotEffect = {
+  line: THREE.Line;
+  flash: THREE.PointLight;
   life: number;
 };
 
@@ -207,6 +218,7 @@ export const GameViewport3D = forwardRef<
   const propsRef = useRef(props);
   const actionsRef = useRef<GameViewportHandle>({
     attack: () => undefined,
+    shoot: () => undefined,
     dodge: () => undefined,
     interact: () => undefined,
     setMove: () => undefined,
@@ -220,6 +232,7 @@ export const GameViewport3D = forwardRef<
     ref,
     () => ({
       attack: () => actionsRef.current.attack(),
+      shoot: () => actionsRef.current.shoot(),
       dodge: () => actionsRef.current.dodge(),
       interact: () => actionsRef.current.interact(),
       setMove: (key, active) => actionsRef.current.setMove(key, active),
@@ -281,14 +294,14 @@ export const GameViewport3D = forwardRef<
       (interaction) => interaction.id === "axe",
     );
     if (axePickup) {
-      void createDetailedStaticModel("/models/fire-axe.gltf", 1.2).then(
+      void createDetailedStaticModel("/models/fire-axe.gltf", 0.82).then(
         (detailedAxe) => {
           if (disposed) return;
           const prototype = axePickup.object.children.find(
             (child) => !child.userData.marker,
           );
           if (prototype) axePickup.object.remove(prototype);
-          detailedAxe.position.y = 0.68;
+          detailedAxe.position.y = 0.54;
           detailedAxe.rotation.z = -0.18;
           axePickup.object.add(detailedAxe);
         },
@@ -314,6 +327,7 @@ export const GameViewport3D = forwardRef<
     const enemies: EnemyActor[] = [];
     const bloodParticles: BloodParticle[] = [];
     const bloodDecals: THREE.Mesh[] = [];
+    const shotEffects: ShotEffect[] = [];
     const bloodGeometry = new THREE.IcosahedronGeometry(0.045, 1);
     const bloodMaterial = new THREE.MeshStandardMaterial({
       color: 0x67130f,
@@ -342,6 +356,7 @@ export const GameViewport3D = forwardRef<
     let dragPointer: { id: number; x: number; y: number } | null = null;
     let attack = 0;
     let attackHit = false;
+    let gunRecoil = 0;
     let dodge = 0;
     let heroHitTimer = 0;
     let stamina = 100;
@@ -357,6 +372,10 @@ export const GameViewport3D = forwardRef<
     let survivalWaveClock = 1.25;
     let survivalTime = 0;
     let survivalReportClock = 0;
+    let combo = 0;
+    let comboClock = 0;
+    let combatScore = 0;
+    let escapeDirectorClock = 7;
     let statsClock = 0;
     let nextEnemyId = 1;
     let elapsedTime = 0;
@@ -481,6 +500,84 @@ export const GameViewport3D = forwardRef<
       if (enemy.character) disposeAnimatedCharacter(enemy.character);
     };
 
+    const spawnShotEffect = (target: THREE.Vector3) => {
+      const start = playerRoot.position
+        .clone()
+        .add(new THREE.Vector3(0, 1.24, 0));
+      const heroForward = new THREE.Vector3(0, 0, -1).applyQuaternion(
+        playerRoot.quaternion,
+      );
+      start.addScaledVector(heroForward, 0.62);
+      const geometry = new THREE.BufferGeometry().setFromPoints([start, target]);
+      const material = new THREE.LineBasicMaterial({
+        color: 0xffd68a,
+        transparent: true,
+        opacity: 0.86,
+        toneMapped: false,
+      });
+      const line = new THREE.Line(geometry, material);
+      line.renderOrder = 48;
+      const flash = new THREE.PointLight(0xffb55c, 10, 6, 2);
+      flash.position.copy(start);
+      scene.add(line, flash);
+      shotEffects.push({ line, flash, life: 0.075 });
+    };
+
+    const damageEnemy = (
+      enemy: EnemyActor,
+      baseDamage: number,
+      direction: THREE.Vector3,
+      bloodCount: number,
+      knockback: number,
+    ) => {
+      if (enemy.dying) return;
+      const current = propsRef.current;
+      const damageMultiplier = 1 + Math.min(0.34, combo * 0.035);
+      const damage = Math.round(baseDamage * damageMultiplier);
+      enemy.hp = Math.max(0, enemy.hp - damage);
+      enemy.hitTimer = 0.52;
+      setHealthBarValue(enemy.healthBar, enemy.hp / enemy.maxHp);
+      enemy.root.position.add(direction.clone().multiplyScalar(knockback));
+      spawnBlood(
+        enemy.root.position.clone().add(new THREE.Vector3(0, 1.18, 0)),
+        direction,
+        bloodCount,
+      );
+      combo = Math.min(12, combo + 1);
+      comboClock = 4.25;
+      combatScore += Math.round(22 * (1 + combo * 0.18));
+      current.onCombatProgress(combo, combatScore);
+      if (combo === 4 || combo === 8 || combo === 12) {
+        current.onSound("combo", {
+          intensity: 0.7 + combo * 0.035,
+        });
+      }
+      current.onSound("zombie-hit", {
+        intensity: baseDamage >= 50 ? 1.05 : 0.78,
+        pan: THREE.MathUtils.clamp(
+          (enemy.root.position.x - playerRoot.position.x) / 8,
+          -0.85,
+          0.85,
+        ),
+      });
+      if (enemy.hp <= 0) {
+        enemy.dying = true;
+        enemy.deathTimer = 1.65;
+        enemy.healthBar.group.visible = false;
+        stamina = Math.min(100, stamina + 9);
+        combatScore += Math.round(120 * (1 + combo * 0.12));
+        current.onCombatProgress(combo, combatScore);
+        current.onSound("zombie-death", {
+          pan: THREE.MathUtils.clamp(
+            (enemy.root.position.x - playerRoot.position.x) / 10,
+            -0.85,
+            0.85,
+          ),
+        });
+        current.onKill();
+      }
+    };
+
     const performAttack = () => {
       if (
         propsRef.current.mode !== "playing" ||
@@ -496,6 +593,64 @@ export const GameViewport3D = forwardRef<
       propsRef.current.onSound("attack-swing", {
         weapon: propsRef.current.inventory.axe ? "axe" : "unarmed",
       });
+    };
+
+    const performShoot = () => {
+      const current = propsRef.current;
+      if (
+        current.mode !== "playing" ||
+        !current.inventory.pistol ||
+        gunRecoil > 0 ||
+        attack > 0
+      ) {
+        return;
+      }
+      if (current.ammo <= 0) {
+        current.onSound("dry-fire");
+        return;
+      }
+
+      gunRecoil = 0.36;
+      current.onAmmoUsed();
+      current.onSound("gunshot");
+      const heroForward = new THREE.Vector3(0, 0, -1).applyQuaternion(
+        playerRoot.quaternion,
+      );
+      let target: EnemyActor | null = null;
+      let bestTargetScore = -Infinity;
+      for (const enemy of enemies) {
+        if (enemy.dying) continue;
+        const offset = enemy.root.position.clone().sub(playerRoot.position);
+        const distance = offset.length();
+        if (distance > 28 || distance < 1.2) continue;
+        const aim = heroForward.dot(offset.normalize());
+        if (aim < 0.72) continue;
+        const targetScore = aim * 2.2 - distance / 38;
+        if (targetScore > bestTargetScore) {
+          bestTargetScore = targetScore;
+          target = enemy;
+        }
+      }
+
+      if (target) {
+        const targetPoint = target.root.position
+          .clone()
+          .add(new THREE.Vector3(0, 1.2, 0));
+        const direction = target.root.position
+          .clone()
+          .sub(playerRoot.position)
+          .normalize();
+        spawnShotEffect(targetPoint);
+        const critical = bestTargetScore > 1.72;
+        damageEnemy(target, critical ? 82 : 48, direction, critical ? 20 : 13, 0.28);
+      } else {
+        spawnShotEffect(
+          playerRoot.position
+            .clone()
+            .add(new THREE.Vector3(0, 1.24, 0))
+            .addScaledVector(heroForward, 27),
+        );
+      }
     };
 
     const performDodge = () => {
@@ -519,6 +674,7 @@ export const GameViewport3D = forwardRef<
 
     actionsRef.current = {
       attack: performAttack,
+      shoot: performShoot,
       dodge: performDodge,
       interact: performInteract,
       setMove: (key, active) => {
@@ -529,7 +685,7 @@ export const GameViewport3D = forwardRef<
     const keyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
       if (
-        ["w", "a", "s", "d", "shift", "e", "f", " ", "q", "r"].includes(
+        ["w", "a", "s", "d", "shift", "e", "f", "g", " ", "q", "r"].includes(
           key,
         )
       ) {
@@ -537,6 +693,7 @@ export const GameViewport3D = forwardRef<
       }
       keys[key] = true;
       if (key === "f") performAttack();
+      if (key === "g") performShoot();
       if (key === " ") performDodge();
       if (key === "e") performInteract();
     };
@@ -587,7 +744,13 @@ export const GameViewport3D = forwardRef<
 
     const syncWorldState = (time: number) => {
       const current = propsRef.current;
-      if (hero) setAnimatedEquipment(hero, current.inventory);
+      if (hero) {
+        setAnimatedEquipment(
+          hero,
+          current.inventory,
+          gunRecoil > 0 ? "pistol" : "axe",
+        );
+      }
 
       if (current.rescued && !maya && !mayaLoading) {
         mayaLoading = true;
@@ -650,6 +813,11 @@ export const GameViewport3D = forwardRef<
         spawnEnemy("walker", 4, -71);
         encounterWasActive = true;
         stationWaveClock = 0;
+      } else if (current.chapter === "escape") {
+        spawnEnemy("walker", -2.8, -31);
+        spawnEnemy("runner", 4.2, -68);
+        spawnEnemy("walker", -3.6, -112);
+        escapeDirectorClock = 8;
       }
     };
 
@@ -702,6 +870,22 @@ export const GameViewport3D = forwardRef<
           }
           scene.remove(particle.mesh);
           bloodParticles.splice(index, 1);
+        }
+      }
+    };
+
+    const updateShots = (delta: number) => {
+      for (let index = shotEffects.length - 1; index >= 0; index -= 1) {
+        const shot = shotEffects[index];
+        shot.life -= delta;
+        const material = shot.line.material as THREE.LineBasicMaterial;
+        material.opacity = Math.max(0, shot.life / 0.075);
+        shot.flash.intensity = Math.max(0, shot.life * 125);
+        if (shot.life <= 0) {
+          scene.remove(shot.line, shot.flash);
+          shot.line.geometry.dispose();
+          material.dispose();
+          shotEffects.splice(index, 1);
         }
       }
     };
@@ -768,8 +952,16 @@ export const GameViewport3D = forwardRef<
         if (running && moving) stamina = Math.max(0, stamina - delta * 17);
         else stamina = Math.min(100, stamina + delta * (moving ? 8 : 15));
         attack = Math.max(0, attack - delta * 1.72);
+        gunRecoil = Math.max(0, gunRecoil - delta * 2.8);
         dodge = Math.max(0, dodge - delta * 2.9);
         heroHitTimer = Math.max(0, heroHitTimer - delta);
+        if (combo > 0) {
+          comboClock -= delta;
+          if (comboClock <= 0) {
+            combo = 0;
+            current.onCombatProgress(0, combatScore);
+          }
+        }
 
         const actualSpeed =
           playerRoot.position.distanceTo(lastPlayerPosition) /
@@ -799,7 +991,9 @@ export const GameViewport3D = forwardRef<
           const heroState: AnimationState =
             heroHitTimer > 0.05
               ? "hit"
-              : attack > 0
+              : gunRecoil > 0
+                ? "shoot"
+                : attack > 0
                 ? actualSpeed > 0.36
                   ? "attackRun"
                   : "attack"
@@ -810,6 +1004,8 @@ export const GameViewport3D = forwardRef<
                   : "idle";
           updateAnimatedCharacter(hero, delta, heroState);
           setCharacterHitFlash(hero, heroHitTimer > 0 ? heroHitTimer : 0);
+          hero.root.rotation.x =
+            gunRecoil > 0 ? -Math.sin(gunRecoil * 20) * 0.055 : 0;
         }
 
         if (attack < 0.65 && attack > 0.18 && !attackHit) {
@@ -825,39 +1021,13 @@ export const GameViewport3D = forwardRef<
             const distance = toEnemy.length();
             const direction = toEnemy.clone().normalize();
             if (distance < 2.85 && heroForward.dot(direction) > -0.05) {
-              const damage = current.inventory.axe ? 58 : 25;
-              enemy.hp = Math.max(0, enemy.hp - damage);
-              enemy.hitTimer = 0.52;
-              setHealthBarValue(enemy.healthBar, enemy.hp / enemy.maxHp);
-              enemy.root.position.add(direction.multiplyScalar(0.38));
-              spawnBlood(
-                enemy.root.position
-                  .clone()
-                  .add(new THREE.Vector3(0, 1.18, 0)),
+              damageEnemy(
+                enemy,
+                current.inventory.axe ? 58 : 25,
                 direction,
                 current.inventory.axe ? 24 : 13,
+                0.38,
               );
-              current.onSound("zombie-hit", {
-                intensity: current.inventory.axe ? 1.05 : 0.78,
-                pan: THREE.MathUtils.clamp(
-                  (enemy.root.position.x - playerRoot.position.x) / 8,
-                  -0.85,
-                  0.85,
-                ),
-              });
-              if (enemy.hp <= 0) {
-                enemy.dying = true;
-                enemy.deathTimer = 1.65;
-                enemy.healthBar.group.visible = false;
-                current.onSound("zombie-death", {
-                  pan: THREE.MathUtils.clamp(
-                    (enemy.root.position.x - playerRoot.position.x) / 10,
-                    -0.85,
-                    0.85,
-                  ),
-                });
-                current.onKill();
-              }
             }
           }
         }
@@ -925,6 +1095,11 @@ export const GameViewport3D = forwardRef<
             current.onSound("player-hit", {
               intensity: enemy.character?.style === "runner" ? 1.08 : 0.88,
             });
+            if (combo > 0) {
+              combo = 0;
+              comboClock = 0;
+              current.onCombatProgress(0, combatScore);
+            }
             current.onDamage(
               enemy.character?.style === "runner" ? 12 : 8,
             );
@@ -1069,6 +1244,35 @@ export const GameViewport3D = forwardRef<
             1,
           );
           current.onEscapeProgress(progress);
+          escapeDirectorClock -= delta;
+          if (
+            progress < 0.93 &&
+            escapeDirectorClock <= 0 &&
+            livingEnemies.length < 5
+          ) {
+            const spawnZ = THREE.MathUtils.clamp(
+              playerRoot.position.z - 18 - Math.random() * 9,
+              world.bounds.minZ + 4,
+              world.bounds.maxZ - 8,
+            );
+            const side = Math.random() > 0.5 ? 1 : -1;
+            spawnEnemy(
+              Math.random() > 0.62 ? "runner" : "walker",
+              side * (3.5 + Math.random() * 3.2),
+              spawnZ,
+            );
+            if (current.health > 58 && Math.random() > 0.46) {
+              spawnEnemy(
+                "walker",
+                -side * (2.5 + Math.random() * 3.4),
+                Math.min(world.bounds.maxZ - 8, spawnZ + 5),
+              );
+            }
+            escapeDirectorClock =
+              current.health < 35
+                ? 17 + Math.random() * 5
+                : 10 + Math.random() * 4;
+          }
         }
 
         if (maya) {
@@ -1134,6 +1338,7 @@ export const GameViewport3D = forwardRef<
       }
 
       updateBlood(delta);
+      updateShots(delta);
       cameraTarget
         .copy(playerRoot.position)
         .add(new THREE.Vector3(0, 1.28, 0));
@@ -1178,6 +1383,10 @@ export const GameViewport3D = forwardRef<
       for (const decal of bloodDecals) {
         decal.geometry.dispose();
         (decal.material as THREE.Material).dispose();
+      }
+      for (const shot of shotEffects) {
+        shot.line.geometry.dispose();
+        (shot.line.material as THREE.Material).dispose();
       }
       bloodGeometry.dispose();
       bloodMaterial.dispose();

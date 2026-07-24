@@ -11,7 +11,10 @@ export type GameSoundEvent =
   | "objective"
   | "heal"
   | "generator"
-  | "wave";
+  | "wave"
+  | "gunshot"
+  | "dry-fire"
+  | "combo";
 
 export type GameSoundOptions = {
   intensity?: number;
@@ -22,6 +25,18 @@ export type GameSoundOptions = {
 };
 
 type AudioContextConstructor = typeof AudioContext;
+type MusicChapter =
+  | "hospital"
+  | "street"
+  | "station"
+  | "escape"
+  | "survival";
+
+type MusicRig = {
+  chapter: MusicChapter;
+  gain: GainNode;
+  sources: AudioScheduledSourceNode[];
+};
 
 function getAudioContextConstructor(): AudioContextConstructor | null {
   if (typeof window === "undefined") return null;
@@ -44,6 +59,7 @@ export class SurvivalAudio {
   private noise: AudioBuffer | null = null;
   private enabled = true;
   private lastPlayed = new Map<GameSoundEvent, number>();
+  private music: MusicRig | null = null;
 
   setEnabled(enabled: boolean) {
     this.enabled = enabled;
@@ -169,6 +185,128 @@ export class SurvivalAudio {
     type: OscillatorType = "sine",
   ) {
     this.tone(frequency, duration, volume, type);
+  }
+
+  startMusic(chapter: MusicChapter, intensity = 0.55) {
+    const context = this.ensureContext();
+    if (!context) return;
+    const targetGain = 0.026 + clamp(intensity, 0, 1) * 0.028;
+    if (this.music?.chapter === chapter) {
+      this.music.gain.gain.setTargetAtTime(
+        targetGain,
+        context.currentTime,
+        0.35,
+      );
+      return;
+    }
+
+    this.stopMusic();
+    const now = context.currentTime;
+    const tonic: Record<MusicChapter, number> = {
+      hospital: 43.65,
+      street: 46.25,
+      station: 41.2,
+      escape: 49,
+      survival: 36.71,
+    };
+    const tempo: Record<MusicChapter, number> = {
+      hospital: 0.72,
+      street: 0.88,
+      station: 1.12,
+      escape: 1.38,
+      survival: 1.68,
+    };
+    const base = tonic[chapter];
+    const musicGain = context.createGain();
+    musicGain.gain.setValueAtTime(0.0001, now);
+    musicGain.gain.exponentialRampToValueAtTime(targetGain, now + 1.8);
+    musicGain.connect(this.master!);
+
+    const droneFilter = context.createBiquadFilter();
+    droneFilter.type = "lowpass";
+    droneFilter.frequency.value = chapter === "hospital" ? 310 : 430;
+    droneFilter.Q.value = 1.8;
+    droneFilter.connect(musicGain);
+
+    const sources: AudioScheduledSourceNode[] = [];
+    const addDrone = (
+      frequency: number,
+      type: OscillatorType,
+      volume: number,
+      detune = 0,
+    ) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = type;
+      oscillator.frequency.value = frequency;
+      oscillator.detune.value = detune;
+      gain.gain.value = volume;
+      oscillator.connect(gain);
+      gain.connect(droneFilter);
+      oscillator.start(now);
+      sources.push(oscillator);
+    };
+    addDrone(base, "sawtooth", 0.34, -6);
+    addDrone(base * 1.006, "triangle", 0.26, 5);
+    addDrone(base / 2, "sine", 0.48);
+    addDrone(base * 1.5, "sine", 0.09, -9);
+
+    const bed = context.createBufferSource();
+    const bedFilter = context.createBiquadFilter();
+    const bedGain = context.createGain();
+    bed.buffer = this.getNoise(context);
+    bed.loop = true;
+    bed.playbackRate.value = 0.18;
+    bedFilter.type = "bandpass";
+    bedFilter.frequency.value = chapter === "hospital" ? 620 : 820;
+    bedFilter.Q.value = 0.42;
+    bedGain.gain.value = chapter === "hospital" ? 0.11 : 0.075;
+    bed.connect(bedFilter);
+    bedFilter.connect(bedGain);
+    bedGain.connect(musicGain);
+    bed.start(now, Math.random() * 0.6);
+    sources.push(bed);
+
+    const pulse = context.createOscillator();
+    const pulseDepth = context.createGain();
+    pulse.type = "sine";
+    pulse.frequency.value = tempo[chapter];
+    pulseDepth.gain.value = targetGain * 0.32;
+    pulse.connect(pulseDepth);
+    pulseDepth.connect(musicGain.gain);
+    pulse.start(now);
+    sources.push(pulse);
+
+    const filterMotion = context.createOscillator();
+    const filterDepth = context.createGain();
+    filterMotion.type = "sine";
+    filterMotion.frequency.value = tempo[chapter] / 5;
+    filterDepth.gain.value = chapter === "hospital" ? 125 : 210;
+    filterMotion.connect(filterDepth);
+    filterDepth.connect(droneFilter.frequency);
+    filterMotion.start(now);
+    sources.push(filterMotion);
+
+    this.music = { chapter, gain: musicGain, sources };
+  }
+
+  stopMusic() {
+    if (!this.music || !this.context) return;
+    const now = this.context.currentTime;
+    this.music.gain.gain.cancelScheduledValues(now);
+    this.music.gain.gain.setValueAtTime(
+      Math.max(0.0001, this.music.gain.gain.value),
+      now,
+    );
+    this.music.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    for (const source of this.music.sources) {
+      try {
+        source.stop(now + 0.62);
+      } catch {
+        // A source can already be stopped while changing chapters quickly.
+      }
+    }
+    this.music = null;
   }
 
   play(event: GameSoundEvent, options: GameSoundOptions = {}) {
@@ -308,10 +446,30 @@ export class SurvivalAudio {
     if (event === "wave") {
       this.tone(92, 0.5, 0.055 * intensity, "sawtooth", pan, 138);
       this.tone(138, 0.46, 0.04 * intensity, "triangle", pan, 207, 0.12);
+      return;
+    }
+
+    if (event === "gunshot") {
+      this.noiseBurst(0.12, 0.19 * intensity, "highpass", 1550, pan);
+      this.tone(118, 0.16, 0.12 * intensity, "square", pan, 48);
+      this.noiseBurst(0.36, 0.052 * intensity, "bandpass", 760, pan, 0.07, 190);
+      return;
+    }
+
+    if (event === "dry-fire") {
+      this.noiseBurst(0.035, 0.035 * intensity, "highpass", 2600, pan);
+      this.tone(920, 0.035, 0.022 * intensity, "square", pan, 520);
+      return;
+    }
+
+    if (event === "combo") {
+      this.tone(330, 0.08, 0.025 * intensity, "triangle", pan, 430);
+      this.tone(495, 0.1, 0.018 * intensity, "sine", pan, 660, 0.045);
     }
   }
 
   close() {
+    this.stopMusic();
     void this.context?.close();
     this.context = null;
     this.master = null;

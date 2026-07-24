@@ -9,6 +9,7 @@ export type AnimationState =
   | "run"
   | "attack"
   | "attackRun"
+  | "shoot"
   | "hit"
   | "death";
 
@@ -74,6 +75,7 @@ function chooseClip(style: AnimatedStyle, state: AnimationState) {
     if (style === "runner") return "Run_Attack";
     return "Punch";
   }
+  if (state === "shoot") return style === "hero" ? "Idle_Gun" : "Punch";
   if (state === "hit") return "HitReact";
   return "Death";
 }
@@ -89,12 +91,24 @@ function cloneMaterials(root: THREE.Object3D, style: AnimatedStyle) {
     const cloned = materials.map((material) => {
       const next = material.clone();
       if (next instanceof THREE.MeshStandardMaterial) {
-        next.roughness = Math.max(next.roughness, 0.64);
-        next.envMapIntensity = 0.75;
+        next.roughness = Math.max(next.roughness, 0.68);
+        next.envMapIntensity = 0.68;
         if (style === "walker") {
-          next.color.multiply(new THREE.Color(0x9ba98f));
+          next.color.multiply(new THREE.Color(0x76806c));
+          next.color.offsetHSL(0, -0.16, -0.08);
+          next.roughness = 0.9;
+          next.metalness *= 0.2;
+          next.envMapIntensity = 0.36;
+          next.emissive.setHex(0x180503);
+          next.emissiveIntensity = 0.08;
         } else if (style === "runner") {
-          next.color.multiply(new THREE.Color(0xa9857a));
+          next.color.multiply(new THREE.Color(0x80645d));
+          next.color.offsetHSL(0, -0.14, -0.09);
+          next.roughness = 0.88;
+          next.metalness *= 0.2;
+          next.envMapIntensity = 0.38;
+          next.emissive.setHex(0x210604);
+          next.emissiveIntensity = 0.1;
         }
       }
       return next;
@@ -106,20 +120,23 @@ function cloneMaterials(root: THREE.Object3D, style: AnimatedStyle) {
 export async function createAnimatedCharacter(
   style: AnimatedStyle,
 ): Promise<AnimatedCharacter> {
-  const modelPath =
-    style === "walker" && Math.random() > 0.58
-      ? "/models/zombie-chubby.gltf"
-      : MODEL_PATHS[style];
+  const modelPath = MODEL_PATHS[style];
   const loaded = await loadModel(modelPath);
   const model = cloneSkeleton(loaded.scene);
   cloneMaterials(model, style);
+
+  if (style === "walker" || style === "runner") {
+    const head = model.getObjectByName("Head");
+    head?.scale.multiply(new THREE.Vector3(0.84, 0.92, 0.86));
+  }
 
   const bounds = new THREE.Box3().setFromObject(model);
   const rawHeight = Math.max(0.01, bounds.max.y - bounds.min.y);
   const targetHeight =
     style === "hero" ? 2.02 : style === "maya" ? 1.9 : style === "runner" ? 1.93 : 2;
   const scale = targetHeight / rawHeight;
-  model.scale.setScalar(scale);
+  const bodyWidth = style === "walker" || style === "runner" ? 0.92 : 1;
+  model.scale.set(scale * bodyWidth, scale, scale * bodyWidth);
   model.rotation.y = Math.PI;
 
   const scaledBounds = new THREE.Box3().setFromObject(model);
@@ -158,14 +175,15 @@ export async function createAnimatedCharacter(
 
 export async function createDetailedStaticModel(
   path: string,
-  targetHeight: number,
+  targetLongestDimension: number,
 ) {
   const loaded = await loadModel(path);
   const model = cloneSkeleton(loaded.scene);
   cloneMaterials(model, "hero");
   const bounds = new THREE.Box3().setFromObject(model);
-  const height = Math.max(0.001, bounds.max.y - bounds.min.y);
-  model.scale.setScalar(targetHeight / height);
+  const size = bounds.getSize(new THREE.Vector3());
+  const longestDimension = Math.max(0.001, size.x, size.y, size.z);
+  model.scale.setScalar(targetLongestDimension / longestDimension);
   const scaledBounds = new THREE.Box3().setFromObject(model);
   model.position.y = -scaledBounds.min.y;
   const root = new THREE.Group();
@@ -176,13 +194,22 @@ export async function createDetailedStaticModel(
 export function setAnimatedEquipment(
   character: AnimatedCharacter,
   inventory: { axe?: boolean; pistol?: boolean },
+  activeWeapon?: "axe" | "pistol",
 ) {
   for (const weapon of character.weaponNodes) weapon.visible = false;
-  const selected = inventory.axe
-    ? character.model.getObjectByName("Axe")
-    : inventory.pistol
-      ? character.model.getObjectByName("Pistol")
-      : null;
+  const selectedName =
+    activeWeapon === "pistol" && inventory.pistol
+      ? "Pistol"
+      : activeWeapon === "axe" && inventory.axe
+        ? "Axe"
+        : inventory.axe
+          ? "Axe"
+          : inventory.pistol
+            ? "Pistol"
+            : null;
+  const selected = selectedName
+    ? character.model.getObjectByName(selectedName)
+    : null;
   if (selected) selected.visible = true;
 }
 

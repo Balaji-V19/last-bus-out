@@ -22,6 +22,7 @@ type SaveData = {
   rescued: boolean;
   kills: number;
   ammo: number;
+  hasPistol?: boolean;
 };
 
 const SAVE_KEY = "last-bus-out-3d-save-v1";
@@ -107,6 +108,7 @@ export function LastBusOutGame() {
   const viewportRef = useRef<GameViewportHandle>(null);
   const audioRef = useRef<SurvivalAudio | null>(null);
   const healthRef = useRef(100);
+  const killsRef = useRef(0);
   const fuelCompleteRef = useRef(false);
   const escapeCompleteRef = useRef(false);
   const toastTimerRef = useRef<number | null>(null);
@@ -121,6 +123,9 @@ export function LastBusOutGame() {
   const [rescued, setRescued] = useState(false);
   const [kills, setKills] = useState(0);
   const [ammo, setAmmo] = useState(0);
+  const [hasPistol, setHasPistol] = useState(false);
+  const [combatCombo, setCombatCombo] = useState(0);
+  const [combatScore, setCombatScore] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
   const [toast, setToast] = useState("");
   const [prompt, setPrompt] = useState<{ id: string; label: string } | null>(null);
@@ -170,12 +175,23 @@ export function LastBusOutGame() {
         rescued,
         kills,
         ammo,
+        hasPistol,
         ...overrides,
       };
       window.localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
       setHasSave(true);
     },
-    [ammo, chapter, fuel, health, kills, medicine, rescued, step],
+    [
+      ammo,
+      chapter,
+      fuel,
+      hasPistol,
+      health,
+      kills,
+      medicine,
+      rescued,
+      step,
+    ],
   );
 
   const loadChapter = useCallback(
@@ -188,6 +204,8 @@ export function LastBusOutGame() {
       setSurvivalWave(1);
       setSurvivalTime(0);
       setSurvivalRemaining(0);
+      setCombatCombo(0);
+      setCombatScore(0);
       setStamina(100);
       fuelCompleteRef.current = false;
       escapeCompleteRef.current = false;
@@ -210,6 +228,7 @@ export function LastBusOutGame() {
 
   const resetRun = useCallback(() => {
     healthRef.current = 100;
+    killsRef.current = 0;
     setHealth(100);
     setStamina(100);
     setMedicine(0);
@@ -217,6 +236,9 @@ export function LastBusOutGame() {
     setRescued(false);
     setKills(0);
     setAmmo(0);
+    setHasPistol(false);
+    setCombatCombo(0);
+    setCombatScore(0);
     setMode("playing");
     setChapter("hospital");
     setStep(0);
@@ -240,6 +262,7 @@ export function LastBusOutGame() {
       return;
     }
     healthRef.current = saved.health;
+    killsRef.current = saved.kills;
     setHealth(saved.health);
     setStamina(100);
     setMedicine(saved.medicine);
@@ -247,6 +270,9 @@ export function LastBusOutGame() {
     setRescued(saved.rescued);
     setKills(saved.kills);
     setAmmo(saved.ammo ?? 0);
+    setHasPistol(saved.hasPistol ?? (saved.ammo ?? 0) > 0);
+    setCombatCombo(0);
+    setCombatScore(0);
     setMode("playing");
     setChapter(saved.chapter);
     setStep(saved.step);
@@ -292,7 +318,8 @@ export function LastBusOutGame() {
           setRescued(true);
           advanceStep(2);
           showToast("Maya joined you");
-        } else if (id === "pistol" && ammo === 0) {
+        } else if (id === "pistol" && !hasPistol) {
+          setHasPistol(true);
           setAmmo(12);
           showToast("Service pistol recovered · 12 rounds");
         } else if (id === "bike" && step >= 2) {
@@ -315,8 +342,8 @@ export function LastBusOutGame() {
     },
     [
       advanceStep,
-      ammo,
       chapter,
+      hasPistol,
       loadChapter,
       medicine,
       playSound,
@@ -338,6 +365,21 @@ export function LastBusOutGame() {
     },
     [setMode, showToast],
   );
+
+  const handleKill = useCallback(() => {
+    const nextKills = killsRef.current + 1;
+    killsRef.current = nextKills;
+    setKills(nextKills);
+    if (nextKills % 4 !== 0) return;
+    if (hasPistol) {
+      setAmmo((value) => value + 4);
+      showToast("Infected cache · 4 pistol rounds recovered");
+    } else {
+      setMedicine((value) => Math.min(3, value + 1));
+      showToast("Infected cache · trauma supplies recovered");
+    }
+    playSound("pickup");
+  }, [hasPistol, playSound, showToast]);
 
   const handleEncounterCleared = useCallback(() => {
     if (chapter === "hospital" && step === 3) {
@@ -421,8 +463,24 @@ export function LastBusOutGame() {
   }, []);
 
   useEffect(() => {
-    audioRef.current?.setEnabled(soundOn);
-  }, [soundOn]);
+    const audio = audioRef.current;
+    if (!soundOn || mode === "menu" || mode === "ending") {
+      audio?.setEnabled(soundOn);
+      audio?.stopMusic();
+      return;
+    }
+    const activeAudio = audio ?? new SurvivalAudio();
+    audioRef.current = activeAudio;
+    activeAudio.setEnabled(true);
+    const threat =
+      chapter === "survival"
+        ? clamp(0.48 + survivalRemaining * 0.045, 0.48, 1)
+        : clamp(0.48 + (100 - health) / 180, 0.48, 0.92);
+    activeAudio.startMusic(
+      chapter,
+      mode === "paused" ? threat * 0.38 : threat,
+    );
+  }, [chapter, health, mode, soundOn, survivalRemaining]);
 
   useEffect(
     () => () => {
@@ -438,7 +496,7 @@ export function LastBusOutGame() {
     radio: beyondHospital || step >= 2,
     axe: beyondHospital || step >= 3,
     medkit: medicine > 0,
-    pistol: ammo > 0,
+    pistol: hasPistol,
     fuel: chapter === "station" || chapter === "escape",
   };
   const objective =
@@ -467,13 +525,20 @@ export function LastBusOutGame() {
         mode={mode}
         step={step}
         rescued={rescued}
+        health={health}
+        ammo={ammo}
         inventory={inventory}
         resetToken={resetToken}
         onInteraction={handleInteraction}
         onPromptChange={setPrompt}
         onStaminaChange={setStamina}
         onDamage={handleDamage}
-        onKill={() => setKills((value) => value + 1)}
+        onKill={handleKill}
+        onAmmoUsed={() => setAmmo((value) => Math.max(0, value - 1))}
+        onCombatProgress={(combo, score) => {
+          setCombatCombo(combo);
+          setCombatScore(score);
+        }}
         onEncounterCleared={handleEncounterCleared}
         onFuelProgress={handleFuelProgress}
         onEscapeProgress={handleEscapeProgress}
@@ -532,6 +597,15 @@ export function LastBusOutGame() {
               </span>
               <span>{Math.round(stamina)}</span>
             </div>
+            <div
+              className={`combat-readout ${combatCombo > 0 ? "active" : ""}`}
+            >
+              <span>Momentum</span>
+              <strong>
+                {combatCombo > 0 ? `×${combatCombo}` : "Ready"}
+              </strong>
+              <small>{combatScore.toLocaleString()} pts</small>
+            </div>
             <div className="equipment-tray" aria-label="Physical equipment carried by the character">
               {inventory.axe && (
                 <div className="equipment-slot selected" title="Fire axe mounted to backpack">
@@ -576,7 +650,10 @@ export function LastBusOutGame() {
             </div>
           </div>
 
-          <div className="look-hint">Drag to look · Wheel to zoom · Shift to run</div>
+          <div className="look-hint">
+            Drag to look · Shift to run · F melee
+            {inventory.pistol ? " · G pistol" : ""}
+          </div>
 
           {prompt && (
             <button className="prompt" onClick={() => viewportRef.current?.interact()}>
@@ -641,6 +718,14 @@ export function LastBusOutGame() {
               <button className="action-button dodge" onClick={() => viewportRef.current?.dodge()}>Dodge</button>
               <button className="action-button interact" onClick={() => viewportRef.current?.interact()}>Use</button>
               <button className="action-button attack" onClick={() => viewportRef.current?.attack()}>Attack</button>
+              {inventory.pistol && (
+                <button
+                  className="action-button shoot"
+                  onClick={() => viewportRef.current?.shoot()}
+                >
+                  Shoot {ammo}
+                </button>
+              )}
             </div>
           </div>
         </>
@@ -679,6 +764,7 @@ export function LastBusOutGame() {
               <span>Drag · Look</span>
               <span>Wheel · Zoom</span>
               <span>F · Attack</span>
+              <span>G · Fire pistol</span>
               <span>E · Interact</span>
               <span>Space · Dodge</span>
             </div>

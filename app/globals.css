@@ -245,6 +245,37 @@ button {
   background: #d4c58f;
 }
 
+.combat-readout {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-left: 2px solid rgba(255, 255, 255, 0.2);
+  background: rgba(8, 12, 10, 0.58);
+  color: rgba(234, 235, 226, 0.72);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 8px;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.combat-readout strong {
+  color: #ded9c9;
+  font-size: 12px;
+}
+
+.combat-readout small {
+  color: rgba(234, 235, 226, 0.52);
+}
+
+.combat-readout.active {
+  border-left-color: var(--signal);
+  background: rgba(56, 37, 19, 0.76);
+  box-shadow: 0 0 18px rgba(240, 182, 60, 0.09);
+}
+
 .equipment-tray {
   display: flex;
   flex-wrap: wrap;
@@ -755,6 +786,7 @@ button {
   }
 
   .action-button.attack { right: 0; bottom: 20px; border-color: rgba(217, 88, 59, 0.7); }
+  .action-button.shoot { right: 2px; top: -25px; border-color: rgba(220, 190, 113, 0.76); }
   .action-button.dodge { left: 27px; top: 0; }
   .action-button.interact { left: 0; bottom: 0; border-color: rgba(240, 182, 60, 0.7); }
 
