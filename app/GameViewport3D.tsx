@@ -54,6 +54,7 @@ type GameViewportProps = {
     seconds: number,
     remaining: number,
   ) => void;
+  onFearChange: (value: number) => void;
   onSound: (event: GameSoundEvent, options?: GameSoundOptions) => void;
 };
 
@@ -136,6 +137,16 @@ function isInteractionAvailable(
     if (id === "generator") return step === 0;
     if (id === "meds") return !inventory.medkit;
     if (id === "bike") return step >= 2;
+  }
+  if (chapter === "checkpoint") {
+    if (id === "checkpoint-radio") return step === 0;
+    if (id === "fuse") return step === 1;
+    if (id === "checkpoint-gate") return step >= 3;
+  }
+  if (chapter === "depot") {
+    if (id === "depot-key") return step === 0;
+    if (id === "battery") return step === 1;
+    if (id === "bus") return step >= 3;
   }
   return false;
 }
@@ -246,25 +257,30 @@ export const GameViewport3D = forwardRef<
 
     let disposed = false;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(
-      props.chapter === "hospital"
-        ? 0x111916
-        : props.chapter === "street"
-          ? 0x3f453e
-          : props.chapter === "station"
-            ? 0x5d3328
-            : props.chapter === "survival"
-              ? 0x152321
-              : 0x49312d,
-    );
+    const backgroundColors: Record<GameChapter, number> = {
+      hospital: 0x111916,
+      street: 0x3f453e,
+      station: 0x5d3328,
+      checkpoint: 0x151b19,
+      depot: 0x0b100e,
+      escape: 0x49312d,
+      survival: 0x152321,
+    };
+    scene.background = new THREE.Color(backgroundColors[props.chapter]);
     scene.fog = new THREE.FogExp2(
       props.chapter === "hospital"
         ? 0x35433d
+        : props.chapter === "checkpoint"
+          ? 0x222c28
+          : props.chapter === "depot"
+            ? 0x18201d
         : props.chapter === "survival"
           ? 0x243c38
           : 0x6c5a4d,
-      props.chapter === "hospital"
+      props.chapter === "hospital" || props.chapter === "depot"
         ? 0.025
+        : props.chapter === "checkpoint"
+          ? 0.019
         : props.chapter === "survival"
           ? 0.018
           : 0.012,
@@ -278,7 +294,8 @@ export const GameViewport3D = forwardRef<
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = props.chapter === "hospital" ? 1.04 : 1.18;
+    renderer.toneMappingExposure =
+      props.chapter === "hospital" || props.chapter === "depot" ? 1.02 : 1.18;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.className = "three-canvas";
@@ -290,6 +307,12 @@ export const GameViewport3D = forwardRef<
 
     const world = buildWorld(props.chapter);
     scene.add(world.root);
+    const flickerLights: THREE.Light[] = [];
+    world.root.traverse((object) => {
+      if (object instanceof THREE.Light && object.userData.flicker) {
+        flickerLights.push(object);
+      }
+    });
     const axePickup = world.interactions.find(
       (interaction) => interaction.id === "axe",
     );
@@ -311,6 +334,21 @@ export const GameViewport3D = forwardRef<
     const playerRoot = new THREE.Group();
     playerRoot.position.copy(world.start);
     scene.add(playerRoot);
+    const flashlight = new THREE.SpotLight(
+      0xeaf4dc,
+      6.8,
+      29,
+      Math.PI / 7.5,
+      0.42,
+      1.35,
+    );
+    flashlight.position.set(0.28, 1.46, -0.34);
+    flashlight.castShadow = true;
+    flashlight.shadow.mapSize.set(1024, 1024);
+    const flashlightTarget = new THREE.Object3D();
+    flashlightTarget.position.set(0.1, 1.02, -10);
+    flashlight.target = flashlightTarget;
+    playerRoot.add(flashlight, flashlightTarget);
     let hero: AnimatedCharacter | null = null;
     void createAnimatedCharacter("hero").then((character) => {
       if (disposed) {
@@ -379,6 +417,12 @@ export const GameViewport3D = forwardRef<
     let statsClock = 0;
     let nextEnemyId = 1;
     let elapsedTime = 0;
+    let fear = 8;
+    let fearReportClock = 0;
+    let heartbeatClock = 0;
+    let horrorPulse = 0;
+    let cameraShake = 0;
+    const scareFlags = new Set<string>();
     let lastFrameTime = performance.now();
 
     const resize = () => {
@@ -441,7 +485,7 @@ export const GameViewport3D = forwardRef<
     };
 
     const spawnEnemy = (
-      style: "walker" | "runner",
+      style: "walker" | "runner" | "heavy",
       x: number,
       z: number,
     ) => {
@@ -449,7 +493,7 @@ export const GameViewport3D = forwardRef<
       root.position.set(x, 0, z);
       root.rotation.y = Math.PI;
       scene.add(root);
-      const maxHp = style === "runner" ? 78 : 112;
+      const maxHp = style === "runner" ? 78 : style === "heavy" ? 245 : 112;
       const survivalDifficulty =
         propsRef.current.chapter === "survival"
           ? Math.min(0.8, Math.max(0, survivalWave - 1) * 0.055)
@@ -462,7 +506,7 @@ export const GameViewport3D = forwardRef<
         hp: scaledMaxHp,
         maxHp: scaledMaxHp,
         speed:
-          (style === "runner" ? 2.75 : 1.3) *
+          (style === "runner" ? 2.75 : style === "heavy" ? 0.88 : 1.3) *
           (1 + survivalDifficulty * 0.28),
         attackClock: 0.5 + Math.random() * 0.7,
         attackAnimation: 0,
@@ -751,6 +795,7 @@ export const GameViewport3D = forwardRef<
           gunRecoil > 0 ? "pistol" : "axe",
         );
       }
+      flashlight.visible = Boolean(current.inventory.torch);
 
       if (current.rescued && !maya && !mayaLoading) {
         mayaLoading = true;
@@ -813,6 +858,21 @@ export const GameViewport3D = forwardRef<
         spawnEnemy("walker", 4, -71);
         encounterWasActive = true;
         stationWaveClock = 0;
+      } else if (current.chapter === "checkpoint" && current.step === 2) {
+        spawnEnemy("walker", -4.8, -51);
+        spawnEnemy("runner", 5.4, -57);
+        spawnEnemy("heavy", 0.8, -76);
+        encounterWasActive = true;
+        horrorPulse = 4.8;
+        current.onSound("horror-sting", { intensity: 1.1 });
+      } else if (current.chapter === "depot" && current.step === 2) {
+        spawnEnemy("walker", -5.8, -45);
+        spawnEnemy("runner", 7.4, -57);
+        spawnEnemy("walker", -3.5, -72);
+        spawnEnemy("heavy", 8.8, -78);
+        encounterWasActive = true;
+        horrorPulse = 5.5;
+        current.onSound("metal-slam", { intensity: 1.15 });
       } else if (current.chapter === "escape") {
         spawnEnemy("walker", -2.8, -31);
         spawnEnemy("runner", 4.2, -68);
@@ -1070,9 +1130,14 @@ export const GameViewport3D = forwardRef<
           enemy.attackClock -= delta;
           if (distance < 1.45 && enemy.attackClock <= 0) {
             enemy.attackClock =
-              enemy.character?.style === "runner" ? 0.82 : 1.18;
+              enemy.character?.style === "runner"
+                ? 0.82
+                : enemy.character?.style === "heavy"
+                  ? 1.48
+                  : 1.18;
             enemy.attackAnimation = 0.74;
             heroHitTimer = 0.36;
+            cameraShake = enemy.character?.style === "heavy" ? 0.58 : 0.34;
             const attackDirection = playerRoot.position
               .clone()
               .sub(enemy.root.position)
@@ -1082,10 +1147,19 @@ export const GameViewport3D = forwardRef<
                 .clone()
                 .add(new THREE.Vector3(0, 1.14, 0)),
               attackDirection,
-              enemy.character?.style === "runner" ? 15 : 10,
+              enemy.character?.style === "runner"
+                ? 15
+                : enemy.character?.style === "heavy"
+                  ? 20
+                  : 10,
             );
             current.onSound("zombie-attack", {
-              intensity: enemy.character?.style === "runner" ? 1.08 : 0.86,
+              intensity:
+                enemy.character?.style === "runner"
+                  ? 1.08
+                  : enemy.character?.style === "heavy"
+                    ? 1.2
+                    : 0.86,
               pan: THREE.MathUtils.clamp(
                 (enemy.root.position.x - playerRoot.position.x) / 7,
                 -0.9,
@@ -1101,7 +1175,11 @@ export const GameViewport3D = forwardRef<
               current.onCombatProgress(0, combatScore);
             }
             current.onDamage(
-              enemy.character?.style === "runner" ? 12 : 8,
+              enemy.character?.style === "runner"
+                ? 12
+                : enemy.character?.style === "heavy"
+                  ? 19
+                  : 8,
             );
           }
 
@@ -1132,6 +1210,112 @@ export const GameViewport3D = forwardRef<
         }
 
         const livingEnemies = enemies.filter((enemy) => !enemy.dying);
+        const scareKey =
+          current.chapter === "hospital" &&
+          current.step >= 3 &&
+          playerRoot.position.z < -48
+            ? "hospital-curtain"
+            : current.chapter === "hospital" &&
+                current.step >= 1 &&
+                playerRoot.position.z < -22
+              ? "hospital-blackout"
+              : current.chapter === "street" &&
+                  current.step >= 1 &&
+                  playerRoot.position.z < -36
+                ? "street-radio"
+                : current.chapter === "station" &&
+                    current.step >= 1 &&
+                    playerRoot.position.z < -46
+                  ? "station-pumps"
+                  : current.chapter === "depot" &&
+                      current.step >= 1 &&
+                      playerRoot.position.z < -42
+                    ? "depot-pit"
+                    : "";
+        if (scareKey && !scareFlags.has(scareKey)) {
+          scareFlags.add(scareKey);
+          horrorPulse = scareKey === "hospital-curtain" ? 5.2 : 3.8;
+          cameraShake = scareKey === "hospital-curtain" ? 0.3 : 0.14;
+          current.onSound(
+            scareKey === "street-radio"
+              ? "radio-static"
+              : scareKey === "depot-pit"
+                ? "metal-slam"
+                : "horror-sting",
+            { intensity: scareKey === "hospital-curtain" ? 1.15 : 0.88 },
+          );
+          if (scareKey === "hospital-curtain") {
+            spawnEnemy(
+              "runner",
+              playerRoot.position.x > 0 ? -5.8 : 5.8,
+              Math.max(world.bounds.minZ + 5, playerRoot.position.z - 8),
+            );
+            encounterWasActive = true;
+          }
+        }
+
+        horrorPulse = Math.max(0, horrorPulse - delta);
+        cameraShake = Math.max(0, cameraShake - delta * 1.8);
+        let nearestThreat = 80;
+        for (const enemy of livingEnemies) {
+          nearestThreat = Math.min(
+            nearestThreat,
+            enemy.root.position.distanceTo(playerRoot.position),
+          );
+        }
+        const chapterDread =
+          current.chapter === "hospital"
+            ? 16
+            : current.chapter === "depot"
+              ? 19
+              : current.chapter === "checkpoint"
+                ? 13
+                : current.chapter === "survival"
+                  ? 20
+                  : 8;
+        const proximityDread =
+          livingEnemies.length === 0
+            ? 0
+            : THREE.MathUtils.clamp((26 - nearestThreat) * 2.9, 0, 64);
+        const injuryDread = THREE.MathUtils.clamp((55 - current.health) * 0.48, 0, 25);
+        const fearTarget = THREE.MathUtils.clamp(
+          chapterDread +
+            proximityDread +
+            injuryDread +
+            Math.min(26, livingEnemies.length * 2.2) +
+            (horrorPulse > 0 ? 34 : 0),
+          4,
+          100,
+        );
+        fear = THREE.MathUtils.lerp(
+          fear,
+          fearTarget,
+          1 - Math.exp(-delta * (fearTarget > fear ? 3.1 : 0.62)),
+        );
+        fearReportClock += delta;
+        if (fearReportClock >= 0.12) {
+          fearReportClock = 0;
+          current.onFearChange(Math.round(fear));
+        }
+        heartbeatClock -= delta;
+        if (fear > 72 && heartbeatClock <= 0) {
+          current.onSound("heartbeat", {
+            intensity: THREE.MathUtils.clamp((fear - 58) / 34, 0.45, 1.2),
+          });
+          heartbeatClock = THREE.MathUtils.lerp(1.05, 0.48, fear / 100);
+        }
+        for (let index = 0; index < flickerLights.length; index += 1) {
+          const light = flickerLights[index];
+          const baseIntensity = Number(light.userData.baseIntensity ?? 1);
+          const failure =
+            horrorPulse > 0 &&
+            Math.sin(time * 28 + index * 2.17) + Math.sin(time * 9.2) > 0.48;
+          const unstable =
+            (current.chapter === "hospital" || current.chapter === "depot") &&
+            Math.sin(time * 1.7 + index * 4.9) > 0.985;
+          light.intensity = failure ? baseIntensity * 0.04 : unstable ? baseIntensity * 0.38 : baseIntensity;
+        }
+
         zombieVoiceClock -= delta;
         if (livingEnemies.length > 0 && zombieVoiceClock <= 0) {
           let nearest = livingEnemies[0];
@@ -1200,11 +1384,15 @@ export const GameViewport3D = forwardRef<
                   0.62,
                   0.16 + survivalWave * 0.035,
                 );
-                spawnEnemy(
-                  Math.random() < runnerChance ? "runner" : "walker",
-                  x,
-                  z,
-                );
+                const style =
+                  survivalWave >= 4 &&
+                  index === 0 &&
+                  survivalWave % 3 === 1
+                    ? "heavy"
+                    : Math.random() < runnerChance
+                      ? "runner"
+                      : "walker";
+                spawnEnemy(style, x, z);
               }
             }
           } else {
@@ -1353,6 +1541,24 @@ export const GameViewport3D = forwardRef<
         playerRoot.position.z +
           Math.cos(cameraYaw) * horizontalDistance,
       );
+      if (cameraShake > 0) {
+        desiredCamera.add(
+          new THREE.Vector3(
+            (Math.random() - 0.5) * cameraShake,
+            (Math.random() - 0.5) * cameraShake * 0.62,
+            (Math.random() - 0.5) * cameraShake,
+          ),
+        );
+      }
+      const targetFov = 58 + fear * 0.018;
+      if (Math.abs(camera.fov - targetFov) > 0.02) {
+        camera.fov = THREE.MathUtils.lerp(
+          camera.fov,
+          targetFov,
+          1 - Math.exp(-delta * 3.2),
+        );
+        camera.updateProjectionMatrix();
+      }
       camera.position.lerp(
         desiredCamera,
         1 - Math.exp(-delta * 9),

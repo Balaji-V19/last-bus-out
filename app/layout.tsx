@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Last Bus Out: Road to Haven",
   description:
-    "An immersive 3D survival journey through an abandoned hospital, ruined city streets, and the final road to Haven.",
+    "A connected 3D horror-survival journey from an abandoned hospital through a fallen checkpoint and transit depot to the last evacuation bus bound for Haven.",
   openGraph: {
     title: "Last Bus Out: Road to Haven",
     description:

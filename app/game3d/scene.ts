@@ -1,9 +1,12 @@
 import * as THREE from "three";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
 export type GameChapter =
   | "hospital"
   | "street"
   | "station"
+  | "checkpoint"
+  | "depot"
   | "escape"
   | "survival";
 export type EquipmentKind = "axe" | "radio" | "torch" | "medkit" | "pistol" | "fuel";
@@ -44,6 +47,8 @@ type MaterialSet = {
   yellow: THREE.MeshStandardMaterial;
   darkGreen: THREE.MeshStandardMaterial;
   fabric: THREE.MeshStandardMaterial;
+  brick: THREE.MeshStandardMaterial;
+  paintedMetal: THREE.MeshStandardMaterial;
 };
 
 function seededNoise(seed: number) {
@@ -110,6 +115,37 @@ function surfaceTexture(
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function brickTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 512;
+  const context = canvas.getContext("2d")!;
+  const random = seededNoise(288);
+  context.fillStyle = "#363a36";
+  context.fillRect(0, 0, 512, 512);
+  const brickHeight = 42;
+  const brickWidth = 92;
+  for (let row = 0; row < 13; row += 1) {
+    const offset = row % 2 === 0 ? -brickWidth / 2 : 0;
+    for (let column = -1; column < 7; column += 1) {
+      const x = column * brickWidth + offset + 3;
+      const y = row * brickHeight + 3;
+      const shade = Math.floor(58 + random() * 28);
+      context.fillStyle = `rgb(${shade + 18},${shade + 3},${shade - 4})`;
+      context.fillRect(x, y, brickWidth - 6, brickHeight - 6);
+      context.fillStyle = `rgba(210,190,165,${0.02 + random() * 0.05})`;
+      context.fillRect(x + 4, y + 4, brickWidth - 14, 3 + random() * 4);
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(3, 5);
   texture.anisotropy = 4;
   return texture;
 }
@@ -195,6 +231,16 @@ function createMaterials(): MaterialSet {
       color: 0x39413b,
       roughness: 1,
     }),
+    brick: new THREE.MeshStandardMaterial({
+      map: brickTexture(),
+      color: 0x8d7a6e,
+      roughness: 0.96,
+    }),
+    paintedMetal: new THREE.MeshStandardMaterial({
+      color: 0x58625d,
+      roughness: 0.55,
+      metalness: 0.52,
+    }),
   };
 }
 
@@ -225,6 +271,27 @@ function cylinder(
 ) {
   const mesh = new THREE.Mesh(
     new THREE.CylinderGeometry(radii[0], radii[1], height, segments),
+    material,
+  );
+  mesh.position.set(...position);
+  mesh.rotation.set(...rotation);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+
+function roundedBox(
+  parent: THREE.Object3D,
+  size: [number, number, number],
+  position: [number, number, number],
+  material: THREE.Material,
+  radius = 0.1,
+  rotation: [number, number, number] = [0, 0, 0],
+) {
+  const safeRadius = Math.min(radius, Math.min(...size) * 0.45);
+  const mesh = new THREE.Mesh(
+    new RoundedBoxGeometry(size[0], size[1], size[2], 4, safeRadius),
     material,
   );
   mesh.position.set(...position);
@@ -289,6 +356,8 @@ function addFluorescent(
   const light = new THREE.PointLight(0xdcebd2, intensity, 13, 2);
   light.position.set(x, 4.2, z);
   light.castShadow = false;
+  light.userData.baseIntensity = intensity;
+  light.userData.flicker = true;
   parent.add(light);
 }
 
@@ -638,6 +707,168 @@ function operatingLamp(materials: MaterialSet, x: number, z: number) {
   return lamp;
 }
 
+function hospitalReception(materials: MaterialSet, x: number, z: number) {
+  const desk = new THREE.Group();
+  desk.position.set(x, 0, z);
+  roundedBox(desk, [3.8, 1.05, 1.05], [0, 0.55, 0], materials.darkGreen, 0.14);
+  roundedBox(desk, [4.05, 0.16, 1.28], [0, 1.08, 0], materials.white, 0.07);
+  roundedBox(desk, [1.15, 0.68, 0.42], [-0.9, 1.5, -0.18], materials.metal, 0.08);
+  const screen = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.92, 0.48),
+    new THREE.MeshBasicMaterial({
+      map: monitorTexture(),
+      toneMapped: false,
+    }),
+  );
+  screen.position.set(-0.9, 1.52, -0.395);
+  screen.rotation.y = Math.PI;
+  desk.add(screen);
+  for (let index = 0; index < 4; index += 1) {
+    roundedBox(
+      desk,
+      [0.62, 0.18, 0.5],
+      [0.65 + (index % 2) * 0.72, 0.28 + Math.floor(index / 2) * 0.3, 0.02],
+      materials.paintedMetal,
+      0.045,
+    );
+  }
+  box(desk, [0.76, 0.025, 0.52], [0.52, 1.2, -0.08], materials.white, [0, 0.18, 0]);
+  return desk;
+}
+
+function pharmacyShelf(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const shelf = new THREE.Group();
+  shelf.position.set(x, 0, z);
+  shelf.rotation.y = rotation;
+  roundedBox(shelf, [2.5, 2.3, 0.52], [0, 1.15, 0], materials.paintedMetal, 0.06);
+  box(shelf, [2.28, 2.05, 0.48], [0, 1.16, -0.04], materials.concreteDark);
+  for (const y of [0.42, 0.86, 1.3, 1.74, 2.14]) {
+    box(shelf, [2.32, 0.055, 0.58], [0, y, 0.02], materials.white);
+  }
+  const colors = [materials.white, materials.red, materials.darkGreen, materials.yellow];
+  for (let row = 0; row < 4; row += 1) {
+    for (let item = 0; item < 9; item += 1) {
+      if ((row * 5 + item) % 7 === 0) continue;
+      const width = 0.11 + ((item + row) % 3) * 0.035;
+      const pack = roundedBox(
+        shelf,
+        [width, 0.2 + (item % 2) * 0.08, 0.16],
+        [-0.98 + item * 0.245, 0.57 + row * 0.44, -0.31],
+        colors[(item + row) % colors.length],
+        0.018,
+      );
+      pack.rotation.z = ((item % 3) - 1) * 0.035;
+    }
+  }
+  return shelf;
+}
+
+function fireExtinguisher(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const extinguisher = new THREE.Group();
+  extinguisher.position.set(x, 0, z);
+  extinguisher.rotation.y = rotation;
+  cylinder(extinguisher, [0.14, 0.17], 0.62, [0, 0.45, 0], materials.red, [0, 0, 0], 20);
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(0.14, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+    materials.red,
+  );
+  dome.position.y = 0.76;
+  extinguisher.add(dome);
+  cylinder(extinguisher, [0.035, 0.035], 0.15, [0, 0.87, 0], materials.metal);
+  box(extinguisher, [0.28, 0.055, 0.06], [0.08, 0.96, 0], materials.metal, [0, 0, -0.2]);
+  return extinguisher;
+}
+
+function makeBusShelter(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const shelter = new THREE.Group();
+  shelter.position.set(x, 0, z);
+  shelter.rotation.y = rotation;
+  for (const side of [-1, 1]) {
+    box(shelter, [0.08, 2.55, 1.8], [side * 1.62, 1.3, 0], materials.glass);
+    cylinder(shelter, [0.045, 0.045], 2.7, [side * 1.7, 1.35, -0.95], materials.metal);
+    cylinder(shelter, [0.045, 0.045], 2.7, [side * 1.7, 1.35, 0.95], materials.metal);
+  }
+  roundedBox(shelter, [3.75, 0.18, 2.25], [0, 2.65, 0], materials.paintedMetal, 0.08);
+  roundedBox(shelter, [2.45, 0.16, 0.62], [0, 0.72, 0.42], materials.darkGreen, 0.06);
+  box(shelter, [3.42, 2.35, 0.05], [0, 1.3, 0.93], materials.glass);
+  return shelter;
+}
+
+function trafficSignal(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const signal = new THREE.Group();
+  signal.position.set(x, 0, z);
+  signal.rotation.y = rotation;
+  cylinder(signal, [0.09, 0.13], 5.8, [0, 2.9, 0], materials.metal, [0, 0, 0], 12);
+  cylinder(signal, [0.07, 0.07], 3.9, [1.8, 5.65, 0], materials.metal, [0, 0, Math.PI / 2], 10);
+  roundedBox(signal, [0.65, 1.75, 0.5], [3.6, 5.1, 0], materials.rubber, 0.09);
+  for (const [y, color, emissive] of [
+    [5.62, 0x54110c, 0x160000],
+    [5.1, 0x5b4b12, 0x241800],
+    [4.58, 0x2e6535, 0x2cbe4e],
+  ] as const) {
+    const lamp = new THREE.Mesh(
+      new THREE.SphereGeometry(0.19, 16, 10),
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive,
+        emissiveIntensity: y < 5 ? 2.6 : 0.1,
+      }),
+    );
+    lamp.position.set(3.6, y, -0.26);
+    signal.add(lamp);
+  }
+  return signal;
+}
+
+function roadCone(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const cone = new THREE.Group();
+  cone.position.set(x, 0, z);
+  cone.rotation.y = rotation;
+  roundedBox(cone, [0.55, 0.08, 0.55], [0, 0.04, 0], materials.rubber, 0.04);
+  const body = new THREE.Mesh(
+    new THREE.ConeGeometry(0.22, 0.72, 18),
+    materials.red,
+  );
+  body.position.y = 0.43;
+  body.castShadow = true;
+  cone.add(body);
+  cylinder(cone, [0.17, 0.12], 0.14, [0, 0.43, 0], materials.white, [0, 0, 0], 18);
+  return cone;
+}
+
+function utilityPole(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const pole = new THREE.Group();
+  pole.position.set(x, 0, z);
+  pole.rotation.y = rotation;
+  cylinder(pole, [0.14, 0.2], 7.6, [0, 3.8, 0], materials.rust, [0, 0, 0], 12);
+  cylinder(pole, [0.09, 0.09], 3.3, [0, 7.1, 0], materials.rust, [0, 0, Math.PI / 2], 10);
+  for (const side of [-1, 1]) {
+    const insulator = cylinder(
+      pole,
+      [0.11, 0.08],
+      0.32,
+      [side * 1.18, 7.3, 0],
+      materials.glass,
+      [0, 0, 0],
+      12,
+    );
+    insulator.castShadow = false;
+  }
+  return pole;
+}
+
+function shippingCrate(materials: MaterialSet, x: number, z: number, rotation = 0, scale = 1) {
+  const crate = new THREE.Group();
+  crate.position.set(x, 0, z);
+  crate.rotation.y = rotation;
+  roundedBox(crate, [1.25 * scale, 0.92 * scale, 1.05 * scale], [0, 0.46 * scale, 0], materials.darkGreen, 0.055);
+  for (const side of [-1, 1]) {
+    box(crate, [0.09 * scale, 0.98 * scale, 1.12 * scale], [side * 0.5 * scale, 0.48 * scale, 0], materials.metal);
+    box(crate, [1.31 * scale, 0.98 * scale, 0.09 * scale], [0, 0.48 * scale, side * 0.43 * scale], materials.metal);
+  }
+  return crate;
+}
+
 function makeCar(
   materials: MaterialSet,
   color: THREE.Material,
@@ -648,20 +879,78 @@ function makeCar(
   const car = new THREE.Group();
   car.position.set(x, 0, z);
   car.rotation.y = rotation;
-  box(car, [1.9, 0.55, 4.2], [0, 0.66, 0], color);
-  box(car, [1.62, 0.62, 2.05], [0, 1.17, -0.25], color);
-  box(car, [1.5, 0.47, 0.08], [0, 1.25, -1.32], materials.glass, [-0.18, 0, 0]);
-  box(car, [1.5, 0.47, 0.08], [0, 1.25, 0.83], materials.glass, [0.18, 0, 0]);
+  roundedBox(car, [1.92, 0.5, 4.15], [0, 0.7, 0], color, 0.2);
+  roundedBox(car, [1.72, 0.72, 2.05], [0, 1.18, -0.22], color, 0.18);
+  roundedBox(car, [1.84, 0.22, 1.38], [0, 0.96, -1.35], color, 0.12);
+  roundedBox(car, [1.82, 0.24, 0.92], [0, 0.88, 1.58], color, 0.1);
+  box(car, [1.5, 0.47, 0.045], [0, 1.27, -1.27], materials.glass, [-0.2, 0, 0]);
+  box(car, [1.5, 0.44, 0.045], [0, 1.25, 0.8], materials.glass, [0.18, 0, 0]);
+  for (const side of [-1, 1]) {
+    box(
+      car,
+      [0.035, 0.43, 0.8],
+      [side * 0.865, 1.25, -0.34],
+      materials.glass,
+    );
+    box(
+      car,
+      [0.035, 0.38, 0.62],
+      [side * 0.865, 1.2, 0.53],
+      materials.glass,
+    );
+    box(
+      car,
+      [0.055, 0.12, 0.24],
+      [side * 0.98, 1.23, -0.88],
+      materials.metal,
+    );
+    box(
+      car,
+      [0.035, 0.04, 1.52],
+      [side * 0.975, 0.79, 0.06],
+      materials.metal,
+    );
+  }
+  box(car, [1.58, 0.16, 0.11], [0, 0.56, -2.1], materials.metal);
+  box(car, [1.48, 0.18, 0.04], [0, 0.75, -2.13], materials.rubber);
+  for (const px of [-0.62, 0.62]) {
+    roundedBox(
+      car,
+      [0.42, 0.18, 0.06],
+      [px, 0.87, -2.12],
+      new THREE.MeshStandardMaterial({
+        color: 0xe8d6a1,
+        emissive: 0xd8a85b,
+        emissiveIntensity: 0.5,
+      }),
+      0.06,
+    );
+    roundedBox(
+      car,
+      [0.34, 0.14, 0.055],
+      [px, 0.78, 2.1],
+      materials.red,
+      0.05,
+    );
+  }
   for (const px of [-0.98, 0.98]) {
     for (const pz of [-1.36, 1.36]) {
+      const tyre = new THREE.Mesh(
+        new THREE.TorusGeometry(0.35, 0.12, 10, 24),
+        materials.rubber,
+      );
+      tyre.position.set(px, 0.42, pz);
+      tyre.rotation.y = Math.PI / 2;
+      tyre.castShadow = true;
+      car.add(tyre);
       cylinder(
         car,
-        [0.36, 0.36],
-        0.24,
-        [px, 0.4, pz],
-        materials.rubber,
+        [0.14, 0.14],
+        0.26,
+        [px, 0.42, pz],
+        materials.metal,
         [0, 0, Math.PI / 2],
-        18,
+        16,
       );
     }
   }
@@ -672,22 +961,58 @@ function makeBus(materials: MaterialSet, x: number, z: number, rotation = 0) {
   const bus = new THREE.Group();
   bus.position.set(x, 0, z);
   bus.rotation.y = rotation;
-  box(bus, [2.55, 2.75, 8.7], [0, 1.6, 0], materials.rust);
+  roundedBox(bus, [2.62, 2.78, 8.75], [0, 1.64, 0], materials.rust, 0.22);
+  roundedBox(bus, [2.5, 0.38, 8.3], [0, 0.56, 0], materials.paintedMetal, 0.13);
+  box(bus, [2.18, 1.18, 0.055], [0, 2.12, -4.4], materials.glass, [-0.04, 0, 0]);
+  box(bus, [2.08, 0.34, 0.08], [0, 0.76, -4.42], materials.rubber);
+  for (const xPosition of [-0.78, -0.26, 0.26, 0.78]) {
+    box(
+      bus,
+      [0.34, 0.13, 0.06],
+      [xPosition, 0.95, -4.46],
+      xPosition < 0 ? materials.white : materials.red,
+    );
+  }
   for (const side of [-1, 1]) {
     for (let p = -3.25; p <= 3.25; p += 1.3) {
-      box(bus, [0.05, 0.72, 0.88], [side * 1.29, 2.06, p], materials.glass);
+      roundedBox(
+        bus,
+        [0.045, 0.74, 0.94],
+        [side * 1.32, 2.12, p],
+        materials.glass,
+        0.03,
+      );
+      box(
+        bus,
+        [0.055, 0.08, 1.02],
+        [side * 1.345, 1.69, p],
+        materials.metal,
+      );
     }
+    box(bus, [0.055, 2.05, 0.95], [side * 1.34, 1.55, -3.37], materials.glass);
+  }
+  box(bus, [2.32, 0.12, 8.15], [0, 3.08, 0], materials.concreteDark);
+  for (const zPosition of [-3.6, 3.58]) {
+    box(bus, [2.86, 0.2, 0.18], [0, 0.44, zPosition], materials.metal);
   }
   for (const px of [-1.3, 1.3]) {
     for (const pz of [-2.75, 2.75]) {
+      const tyre = new THREE.Mesh(
+        new THREE.TorusGeometry(0.47, 0.16, 10, 26),
+        materials.rubber,
+      );
+      tyre.position.set(px, 0.55, pz);
+      tyre.rotation.y = Math.PI / 2;
+      tyre.castShadow = true;
+      bus.add(tyre);
       cylinder(
         bus,
-        [0.48, 0.48],
-        0.3,
-        [px, 0.52, pz],
-        materials.rubber,
+        [0.2, 0.2],
+        0.32,
+        [px, 0.55, pz],
+        materials.metal,
         [0, 0, Math.PI / 2],
-        20,
+        18,
       );
     }
   }
@@ -707,6 +1032,8 @@ function streetLight(materials: MaterialSet, x: number, z: number, side = 1) {
   box(light, [0.54, 0.16, 0.34], [side * 1.08, 5.18, 0], lampMaterial);
   const point = new THREE.PointLight(0xf3b96c, 2.2, 15, 2);
   point.position.set(side * 1.08, 4.88, 0);
+  point.userData.baseIntensity = 2.2;
+  point.userData.flicker = true;
   light.add(point);
   return light;
 }
@@ -723,7 +1050,14 @@ function addBuilding(
 ) {
   const building = new THREE.Group();
   building.position.set(x, 0, z);
-  box(building, [width, height, depth], [0, height / 2, 0], materials.concreteDark);
+  const wallMaterial = height > 12 ? materials.concreteDark : materials.brick;
+  box(building, [width, height, depth], [0, height / 2, 0], wallMaterial);
+  box(
+    building,
+    [width + 0.22, 0.4, depth + 0.22],
+    [0, height + 0.2, 0],
+    materials.concreteDark,
+  );
   const windowMaterial = new THREE.MeshStandardMaterial({
     color: 0x253332,
     emissive: 0x111d1d,
@@ -734,9 +1068,62 @@ function addBuilding(
   const faceX = side * (width / 2 + 0.015);
   for (let y = 2.2; y < height - 1; y += 2.2) {
     for (let p = -depth / 2 + 1.4; p < depth / 2 - 0.5; p += 2.2) {
-      box(building, [0.035, 0.92, 1.18], [faceX, y, p], windowMaterial);
+      box(
+        building,
+        [0.06, 1.08, 1.36],
+        [faceX + side * 0.025, y, p],
+        materials.metal,
+      );
+      box(
+        building,
+        [0.075, 0.88, 1.14],
+        [faceX + side * 0.06, y, p],
+        windowMaterial,
+      );
+      box(
+        building,
+        [0.09, 0.05, 1.5],
+        [faceX + side * 0.1, y - 0.58, p],
+        materials.concrete,
+      );
     }
   }
+  const entranceZ = depth * 0.18;
+  roundedBox(
+    building,
+    [0.1, 2.15, 1.15],
+    [faceX + side * 0.09, 1.08, entranceZ],
+    materials.glass,
+    0.04,
+  );
+  box(
+    building,
+    [0.72, 0.14, 3.4],
+    [faceX + side * 0.46, 2.45, entranceZ],
+    materials.darkGreen,
+    [0, 0, side * 0.05],
+  );
+  box(
+    building,
+    [0.14, 1.8, 2.9],
+    [faceX + side * 0.16, 1.25, -depth * 0.28],
+    materials.rust,
+  );
+  for (const y of [1.2, 2.5, 3.8]) {
+    box(
+      building,
+      [0.5, 0.08, 3.1],
+      [faceX + side * 0.38, y, -depth * 0.28],
+      materials.metal,
+    );
+  }
+  cylinder(
+    building,
+    [0.07, 0.07],
+    Math.max(3.2, height - 1),
+    [faceX + side * 0.18, height / 2, depth * 0.42],
+    materials.rust,
+  );
   parent.add(building);
   return building;
 }
@@ -744,9 +1131,9 @@ function addBuilding(
 function makePump(materials: MaterialSet, x: number, z: number, number: string) {
   const pump = new THREE.Group();
   pump.position.set(x, 0, z);
-  box(pump, [1.05, 1.95, 0.72], [0, 1, 0], materials.white);
-  box(pump, [0.82, 0.5, 0.05], [0, 1.45, 0.39], materials.glass);
-  box(pump, [0.76, 0.19, 0.05], [0, 1.05, 0.39], materials.red);
+  roundedBox(pump, [1.05, 1.95, 0.72], [0, 1, 0], materials.white, 0.13);
+  roundedBox(pump, [0.82, 0.5, 0.055], [0, 1.45, 0.39], materials.glass, 0.05);
+  roundedBox(pump, [0.76, 0.19, 0.055], [0, 1.05, 0.39], materials.red, 0.04);
   const label = textPanel(number, "#f4e9d2", "rgba(118,32,25,.95)");
   label.scale.setScalar(0.24);
   label.position.set(0, 1.83, 0.375);
@@ -758,6 +1145,8 @@ function makePump(materials: MaterialSet, x: number, z: number, number: string) 
   hose.position.set(0.48, 1, 0.42);
   hose.rotation.z = -0.6;
   pump.add(hose);
+  roundedBox(pump, [0.13, 0.46, 0.1], [0.55, 0.94, 0.48], materials.metal, 0.035);
+  box(pump, [1.18, 0.14, 0.88], [0, 0.12, 0], materials.concreteDark);
   return pump;
 }
 
@@ -774,12 +1163,61 @@ function makeMotorcycle(materials: MaterialSet, x: number, z: number, rotation =
     wheel.rotation.y = Math.PI / 2;
     wheel.castShadow = true;
     bike.add(wheel);
+    cylinder(
+      bike,
+      [0.1, 0.1],
+      0.18,
+      [0, 0.48, wheelZ],
+      materials.metal,
+      [Math.PI / 2, 0, 0],
+      18,
+    );
   }
-  box(bike, [0.25, 0.2, 1.25], [0, 0.84, 0], materials.red, [0.08, 0, 0]);
-  cylinder(bike, [0.19, 0.19], 0.42, [0, 0.76, -0.2], materials.metal, [Math.PI / 2, 0, 0]);
-  box(bike, [0.48, 0.18, 0.72], [0, 1.03, 0.18], materials.rubber);
-  cylinder(bike, [0.035, 0.035], 0.92, [0, 0.85, 0.68], materials.metal, [0.56, 0, 0]);
+  const tank = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.28, 0.48, 6, 16),
+    materials.red,
+  );
+  tank.position.set(0, 1.02, -0.16);
+  tank.rotation.x = Math.PI / 2;
+  tank.scale.set(0.82, 1, 0.72);
+  tank.castShadow = true;
+  bike.add(tank);
+  for (const side of [-1, 1]) {
+    const frameCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(side * 0.14, 0.55, -0.72),
+      new THREE.Vector3(side * 0.19, 0.82, -0.12),
+      new THREE.Vector3(side * 0.16, 0.68, 0.64),
+    ]);
+    bike.add(
+      new THREE.Mesh(
+        new THREE.TubeGeometry(frameCurve, 18, 0.035, 8, false),
+        materials.metal,
+      ),
+    );
+    cylinder(
+      bike,
+      [0.035, 0.035],
+      1.05,
+      [side * 0.18, 0.82, 0.58],
+      materials.metal,
+      [0.62, 0, 0],
+      10,
+    );
+  }
+  cylinder(bike, [0.2, 0.2], 0.44, [0, 0.72, -0.12], materials.metal, [Math.PI / 2, 0, 0], 22);
+  roundedBox(bike, [0.46, 0.16, 0.78], [0, 1.08, 0.35], materials.rubber, 0.08);
+  cylinder(bike, [0.1, 0.1], 0.55, [0.32, 0.64, -0.16], materials.metal, [Math.PI / 2, 0, 0], 16);
   box(bike, [0.85, 0.06, 0.06], [0, 1.22, 0.98], materials.metal);
+  const headlamp = new THREE.Mesh(
+    new THREE.SphereGeometry(0.15, 16, 10),
+    new THREE.MeshStandardMaterial({
+      color: 0xffe6b1,
+      emissive: 0xffbd5c,
+      emissiveIntensity: 1.1,
+    }),
+  );
+  headlamp.position.set(0, 1.18, 0.92);
+  bike.add(headlamp);
   return bike;
 }
 
@@ -801,19 +1239,39 @@ function makeBarrier(materials: MaterialSet, x: number, z: number, rotation = 0)
 function makeTree(materials: MaterialSet, x: number, z: number, scale = 1) {
   const tree = new THREE.Group();
   tree.position.set(x, 0, z);
-  cylinder(tree, [0.18 * scale, 0.28 * scale], 3.8 * scale, [0, 1.9 * scale, 0], materials.rust);
-  const foliage = new THREE.MeshStandardMaterial({
-    color: 0x263d2e,
-    roughness: 1,
-  });
-  for (const [ox, oy, oz, radius] of [
-    [0, 4.2, 0, 1.5],
-    [-0.8, 3.9, 0.15, 1.05],
-    [0.72, 4.05, -0.2, 1.18],
-    [0.1, 5.05, 0, 1.0],
+  cylinder(tree, [0.16 * scale, 0.31 * scale], 4.2 * scale, [0, 2.1 * scale, 0], materials.rust, [0.05, 0, -0.04], 10);
+  for (const [side, height, lean] of [
+    [-1, 3.45, -0.62],
+    [1, 3.72, 0.58],
+    [-1, 4.2, -0.42],
   ] as const) {
-    const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(radius * scale, 1), foliage);
+    cylinder(
+      tree,
+      [0.07 * scale, 0.13 * scale],
+      1.7 * scale,
+      [side * 0.43 * scale, height * scale, 0],
+      materials.rust,
+      [0, 0, lean],
+      8,
+    );
+  }
+  const foliageMaterials = [0x1f3427, 0x2b4432, 0x334d37].map(
+    (color) => new THREE.MeshStandardMaterial({ color, roughness: 1 }),
+  );
+  for (const [ox, oy, oz, radius, materialIndex] of [
+    [0, 4.3, 0, 1.4, 0],
+    [-0.9, 4.05, 0.2, 0.98, 1],
+    [0.8, 4.18, -0.25, 1.08, 2],
+    [0.08, 5.15, 0, 0.92, 1],
+    [-0.55, 4.82, -0.38, 0.75, 0],
+  ] as const) {
+    const crown = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(radius * scale, 1),
+      foliageMaterials[materialIndex],
+    );
     crown.position.set(ox * scale, oy * scale, oz * scale);
+    crown.rotation.set(ox * 0.32, oy * 0.17, oz * 0.42);
+    crown.scale.set(1.08, 0.82 + materialIndex * 0.05, 0.94);
     crown.castShadow = true;
     tree.add(crown);
   }
@@ -926,6 +1384,8 @@ function baseScene(root: THREE.Group, chapter: GameChapter) {
     hospital: [0xc8d1c5, 0x17201d],
     street: [0xd6b882, 0x20231f],
     station: [0xf0a56b, 0x241b17],
+    checkpoint: [0x8e9c91, 0x161b18],
+    depot: [0x7d8b83, 0x101513],
     escape: [0xf0a17c, 0x211a1a],
     survival: [0x819da0, 0x101916],
   };
@@ -962,6 +1422,47 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
 
   for (let z = 5; z >= -86; z -= 7.4) {
     addFluorescent(root, z % 14.8 === 5 ? -2.7 : 2.7, z, z < -62 ? 1.1 : 2.5);
+  }
+
+  for (const [label, z, color] of [
+    ["TRIAGE", -8, "rgba(43,78,68,.96)"],
+    ["PHARMACY", -31, "rgba(49,70,83,.96)"],
+    ["SURGERY", -55, "rgba(76,45,42,.96)"],
+    ["EMERGENCY", -76, "rgba(95,34,29,.96)"],
+  ] as const) {
+    const sign = textPanel(label, "#e8eee5", color);
+    sign.position.set(0, 3.82, z);
+    sign.scale.set(0.66, 0.66, 0.66);
+    root.add(sign);
+  }
+
+  const reception = hospitalReception(materials, 7.05, -12);
+  reception.rotation.y = Math.PI / 2;
+  root.add(reception);
+  collisions.push({ x: 7.05, z: -12, radius: 1.05 });
+  const startBed = hospitalBed(materials, -5.4, 1.8, Math.PI / 2 - 0.08);
+  root.add(startBed);
+  collisions.push({ x: -5.4, z: 1.8, radius: 1.25 });
+  root.add(
+    pharmacyShelf(materials, -7.65, -34.5, Math.PI / 2),
+    pharmacyShelf(materials, 7.65, -38.2, -Math.PI / 2),
+    fireExtinguisher(materials, -7.88, -16.2, Math.PI / 2),
+    fireExtinguisher(materials, 7.88, -60.5, -Math.PI / 2),
+  );
+  collisions.push(
+    { x: -7.1, z: -34.5, radius: 0.65 },
+    { x: 7.1, z: -38.2, radius: 0.65 },
+  );
+
+  for (const side of [-1, 1]) {
+    for (let z = 2; z >= -84; z -= 8.5) {
+      box(
+        root,
+        [0.12, 0.11, 7.1],
+        [side * 7.93, 1.02, z - 3.5],
+        materials.paintedMetal,
+      );
+    }
   }
 
   for (const side of [-1, 1] as const) {
@@ -1155,7 +1656,31 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     roughness: 0.62,
     metalness: 0.22,
   });
-  box(root, [3.2, 3.6, 0.18], [0, 1.8, -90.74], exitDoorMaterial);
+  for (const side of [-1, 1]) {
+    roundedBox(
+      root,
+      [1.52, 3.52, 0.18],
+      [side * 0.8, 1.76, -90.74],
+      exitDoorMaterial,
+      0.08,
+    );
+    roundedBox(
+      root,
+      [0.78, 1.35, 0.04],
+      [side * 0.8, 2.25, -90.62],
+      materials.glass,
+      0.05,
+    );
+    cylinder(
+      root,
+      [0.035, 0.035],
+      0.42,
+      [side * 0.28, 1.68, -90.48],
+      materials.metal,
+      [Math.PI / 2, 0, 0],
+      10,
+    );
+  }
   box(root, [0.08, 3.6, 0.25], [0, 1.8, -90.6], materials.metal);
 
   interactions.push(
@@ -1180,19 +1705,41 @@ function buildStreet(materials: MaterialSet): BuiltWorld {
   const interactions: InteractionPoint[] = [];
   baseScene(root, "street");
 
-  box(root, [20, 0.24, 140], [0, -0.12, -56], materials.asphalt);
-  box(root, [5, 0.34, 140], [-12.5, 0.02, -56], materials.concrete);
-  box(root, [5, 0.34, 140], [12.5, 0.02, -56], materials.concrete);
-  for (let z = 8; z >= -120; z -= 10) {
+  box(root, [20, 0.24, 166], [0, -0.12, -68], materials.asphalt);
+  box(root, [5, 0.34, 166], [-12.5, 0.02, -68], materials.concrete);
+  box(root, [5, 0.34, 166], [12.5, 0.02, -68], materials.concrete);
+  for (let z = 8; z >= -144; z -= 10) {
     box(root, [0.16, 0.025, 4.4], [0, 0.02, z], materials.yellow);
   }
 
-  for (let z = 0; z >= -112; z -= 18) {
+  for (let z = 0; z >= -126; z -= 18) {
     addBuilding(root, materials, -18.4, z, 7, 10 + (Math.abs(z) % 4), 15, 1);
     addBuilding(root, materials, 18.4, z - 7, 7, 13 + (Math.abs(z) % 5), 15, -1);
     root.add(streetLight(materials, -9.2, z - 4, 1));
     root.add(streetLight(materials, 9.2, z - 12, -1));
   }
+
+  for (const x of [-7.2, -4.8, -2.4, 2.4, 4.8, 7.2]) {
+    box(root, [1.35, 0.03, 0.42], [x, 0.03, -38], materials.white);
+  }
+  root.add(
+    trafficSignal(materials, -9.6, -39, 0),
+    makeBusShelter(materials, 12.45, -25, Math.PI / 2),
+    utilityPole(materials, -11.2, -14),
+    utilityPole(materials, 11.4, -86, Math.PI),
+  );
+  for (const [x, z, rotation] of [
+    [-5.8, -63, 0.12],
+    [-4.7, -64.4, -0.3],
+    [5.4, -91, 0.2],
+    [6.2, -92.2, -0.16],
+  ] as const) {
+    root.add(roadCone(materials, x, z, rotation));
+  }
+  root.add(
+    liquidPuddle("#1b2525", 3.6, -18.5, 2.7, -0.3),
+    liquidPuddle("#4e1714", -1.8, -76, 1.5, 0.4),
+  );
 
   const carA = makeCar(materials, materials.darkGreen, -4.8, -24, 0.2);
   root.add(carA);
@@ -1200,9 +1747,32 @@ function buildStreet(materials: MaterialSet): BuiltWorld {
   const carB = makeCar(materials, materials.rust, 4.6, -54, -0.28);
   root.add(carB);
   collisions.push({ x: 4.6, z: -54, radius: 2.3 });
-  const carC = makeCar(materials, materials.white, -5.2, -82, 0.48);
+  const carC = makeCar(materials, materials.white, -4.2, -70, 0.48);
+  roundedBox(carC, [0.92, 0.12, 0.28], [0, 1.68, -0.28], materials.metal, 0.04);
+  roundedBox(
+    carC,
+    [0.36, 0.1, 0.22],
+    [-0.25, 1.76, -0.28],
+    new THREE.MeshStandardMaterial({
+      color: 0x263e93,
+      emissive: 0x183eaa,
+      emissiveIntensity: 1.4,
+    }),
+    0.035,
+  );
+  roundedBox(
+    carC,
+    [0.36, 0.1, 0.22],
+    [0.25, 1.76, -0.28],
+    new THREE.MeshStandardMaterial({
+      color: 0x9b231d,
+      emissive: 0xb42a22,
+      emissiveIntensity: 1.4,
+    }),
+    0.035,
+  );
   root.add(carC);
-  collisions.push({ x: -5.2, z: -82, radius: 2.3 });
+  collisions.push({ x: -4.2, z: -70, radius: 2.3 });
   const bus = makeBus(materials, 4.8, -105, -0.12);
   root.add(bus);
   collisions.push({ x: 4.8, z: -105, radius: 4.7 });
@@ -1214,6 +1784,25 @@ function buildStreet(materials: MaterialSet): BuiltWorld {
   policeSign.rotation.y = Math.PI / 2;
   policeSign.position.set(-14.92, 3.6, -48);
   root.add(policeSign);
+
+  const overpass = new THREE.Group();
+  overpass.position.set(0, 0, -139);
+  for (const side of [-1, 1]) {
+    box(overpass, [4.2, 5.6, 3.8], [side * 9.8, 2.8, 0], materials.concreteDark);
+    box(overpass, [3.4, 1.2, 1.2], [side * 7.3, 4.8, 0], materials.concreteDark, [0, 0, side * 0.38]);
+  }
+  box(overpass, [15, 1.05, 3.8], [0, 5.15, 0], materials.concreteDark);
+  const tunnelSign = textPanel("NORTHLINE  4 KM", "#e7e6d9", "rgba(31,52,43,.96)");
+  tunnelSign.position.set(0, 4.25, 1.96);
+  tunnelSign.scale.set(0.92, 0.92, 0.92);
+  overpass.add(tunnelSign);
+  const tunnelDark = new THREE.Mesh(
+    new THREE.PlaneGeometry(14.2, 4.35),
+    new THREE.MeshBasicMaterial({ color: 0x050807, side: THREE.DoubleSide }),
+  );
+  tunnelDark.position.set(0, 2.2, -2.05);
+  overpass.add(tunnelDark);
+  root.add(overpass);
 
   interactions.push(
     interactionObject(root, "signal", "Tune the radio signal", [0.8, 0, -18], createEquipmentModel("radio", 1)),
@@ -1229,7 +1818,7 @@ function buildStreet(materials: MaterialSet): BuiltWorld {
     collisions,
     interactions,
     start: new THREE.Vector3(0, 0, 7),
-    bounds: { minX: -9.2, maxX: 9.2, minZ: -116, maxZ: 8 },
+    bounds: { minX: -9.2, maxX: 9.2, minZ: -120, maxZ: 8 },
   };
 }
 
@@ -1240,15 +1829,26 @@ function buildStation(materials: MaterialSet): BuiltWorld {
   baseScene(root, "station");
 
   box(root, [38, 0.24, 112], [0, -0.12, -46], materials.asphalt);
-  box(root, [25, 0.26, 20], [0, 0, -74], materials.concrete);
-  box(root, [23, 4.6, 11], [0, 2.3, -83], materials.concreteDark);
-  box(root, [14, 3.1, 0.14], [0, 1.55, -77.45], materials.glass);
+  box(root, [25, 0.26, 20], [0, 0, -79], materials.concrete);
+  box(root, [23, 0.24, 11], [0, 4.55, -83], materials.concreteDark);
+  box(root, [23, 4.6, 0.34], [0, 2.3, -88.45], materials.brick);
+  box(root, [0.34, 4.6, 11], [-11.45, 2.3, -83], materials.brick);
+  box(root, [0.34, 4.6, 11], [11.45, 2.3, -83], materials.brick);
+  for (const x of [-8.4, -5.6, -2.8, 2.8, 5.6, 8.4]) {
+    box(root, [2.45, 3.1, 0.1], [x, 1.55, -77.48], materials.glass);
+  }
+  for (const x of [-1.12, 1.12]) {
+    roundedBox(root, [2.1, 3.2, 0.14], [x, 1.6, -77.45], materials.glass, 0.06);
+    cylinder(root, [0.035, 0.035], 0.55, [x + (x < 0 ? 0.72 : -0.72), 1.55, -77.28], materials.metal);
+  }
   const stationSign = textPanel("NORTHLINE", "#f4d8af", "rgba(91,33,24,.96)");
-  stationSign.position.set(0, 4.05, -77.36);
+  stationSign.position.set(0, 4.02, -77.32);
   stationSign.scale.set(1.6, 1.2, 1);
   root.add(stationSign);
 
-  box(root, [26, 0.46, 12], [0, 5.15, -35], materials.white);
+  roundedBox(root, [26, 0.46, 12], [0, 5.15, -35], materials.white, 0.13);
+  box(root, [26.2, 0.65, 0.28], [0, 4.92, -29.08], materials.red);
+  box(root, [26.2, 0.65, 0.28], [0, 4.92, -40.92], materials.red);
   for (const x of [-10.5, 10.5]) {
     for (const z of [-39.2, -30.8]) {
       cylinder(root, [0.23, 0.23], 5.1, [x, 2.55, z], materials.metal);
@@ -1262,6 +1862,30 @@ function buildStation(materials: MaterialSet): BuiltWorld {
     canopyLight.position.set(x, 4.78, -35);
     root.add(canopyLight);
   }
+
+  for (const [x, z, rotation] of [
+    [-7.5, -82.1, 0],
+    [0, -84.9, Math.PI],
+    [7.5, -82.1, 0],
+  ] as const) {
+    root.add(pharmacyShelf(materials, x, z, rotation));
+    collisions.push({ x, z, radius: 1.35 });
+  }
+  const shopCounter = hospitalReception(materials, -7.8, -86.8);
+  shopCounter.scale.set(0.78, 0.78, 0.78);
+  root.add(shopCounter);
+  collisions.push({ x: -7.8, z: -86.2, radius: 1.6 });
+  for (const x of [4.8, 7.1, 9.4]) {
+    roundedBox(root, [1.9, 2.7, 0.72], [x, 1.35, -87.9], materials.white, 0.08);
+    roundedBox(root, [1.62, 2.2, 0.055], [x, 1.45, -87.5], materials.glass, 0.04);
+  }
+  root.add(
+    roadCone(materials, -3.6, -42, 0.2),
+    roadCone(materials, -2.8, -44, -0.18),
+    liquidPuddle("#221d19", 7.8, -53, 3.1, 0.18),
+    shippingCrate(materials, 7.4, -69, -0.14, 0.8),
+  );
+  collisions.push({ x: 7.4, z: -69, radius: 0.7 });
 
   const tanker = new THREE.Group();
   tanker.position.set(-12.5, 0, -64);
@@ -1293,16 +1917,368 @@ function buildStation(materials: MaterialSet): BuiltWorld {
     interactionObject(root, "generator", "Start backup generator", [9, 0, -59.5], createEquipmentModel("fuel", 0.8)),
     interactionObject(root, "meds", "Take medical supplies", [-7, 0, -72], createEquipmentModel("medkit", 0.9)),
   );
-  const bike = makeMotorcycle(materials, 0, -8, Math.PI);
+  const bike = makeMotorcycle(materials, 0, -7.5, Math.PI);
   root.add(bike);
-  interactions.push(interactionObject(root, "bike", "Ride toward Haven", [0, 0, -10.5], new THREE.Group()));
+  interactions.push(interactionObject(root, "bike", "Ride to Blackwood checkpoint", [0, 0, -9.8], new THREE.Group()));
 
   return {
     root,
     collisions,
     interactions,
-    start: new THREE.Vector3(0, 0, 4),
-    bounds: { minX: -17.5, maxX: 17.5, minZ: -74, maxZ: 8 },
+    start: new THREE.Vector3(1.7, 0, -6.4),
+    bounds: { minX: -17.5, maxX: 17.5, minZ: -87.2, maxZ: 8 },
+  };
+}
+
+function sandbagWall(
+  materials: MaterialSet,
+  x: number,
+  z: number,
+  rotation = 0,
+  length = 5,
+) {
+  const wall = new THREE.Group();
+  wall.position.set(x, 0, z);
+  wall.rotation.y = rotation;
+  const sand = new THREE.MeshStandardMaterial({
+    color: 0x77725d,
+    roughness: 1,
+  });
+  for (let row = 0; row < 3; row += 1) {
+    const count = Math.max(2, length - row);
+    for (let index = 0; index < count; index += 1) {
+      const bag = roundedBox(
+        wall,
+        [0.92, 0.26, 0.46],
+        [
+          (index - (count - 1) / 2) * 0.86,
+          0.14 + row * 0.24,
+          (row % 2) * 0.08,
+        ],
+        sand,
+        0.12,
+      );
+      bag.rotation.y = ((index + row) % 3 - 1) * 0.035;
+    }
+  }
+  return wall;
+}
+
+function toolBench(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const bench = new THREE.Group();
+  bench.position.set(x, 0, z);
+  bench.rotation.y = rotation;
+  roundedBox(bench, [2.5, 0.18, 0.85], [0, 1.02, 0], materials.metal, 0.06);
+  for (const side of [-1, 1]) {
+    cylinder(bench, [0.055, 0.055], 1.02, [side * 1.05, 0.52, -0.3], materials.metal);
+    cylinder(bench, [0.055, 0.055], 1.02, [side * 1.05, 0.52, 0.3], materials.metal);
+  }
+  box(bench, [2.35, 1.55, 0.09], [0, 1.82, 0.34], materials.paintedMetal);
+  for (let index = 0; index < 7; index += 1) {
+    const tool = box(
+      bench,
+      [0.05, 0.48 - (index % 3) * 0.08, 0.05],
+      [-0.88 + index * 0.29, 1.82, 0.4],
+      index % 2 === 0 ? materials.yellow : materials.rust,
+      [0, 0, (index % 2 === 0 ? 1 : -1) * 0.18],
+    );
+    tool.castShadow = false;
+  }
+  return bench;
+}
+
+function makeForklift(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const lift = new THREE.Group();
+  lift.position.set(x, 0, z);
+  lift.rotation.y = rotation;
+  roundedBox(lift, [1.55, 0.72, 2.15], [0, 0.67, 0], materials.yellow, 0.16);
+  roundedBox(lift, [1.15, 0.85, 0.9], [0, 1.35, 0.34], materials.darkGreen, 0.1);
+  for (const side of [-1, 1]) {
+    cylinder(lift, [0.31, 0.31], 0.22, [side * 0.77, 0.36, -0.62], materials.rubber, [0, 0, Math.PI / 2], 18);
+    cylinder(lift, [0.24, 0.24], 0.22, [side * 0.77, 0.31, 0.69], materials.rubber, [0, 0, Math.PI / 2], 18);
+    cylinder(lift, [0.055, 0.055], 2.65, [side * 0.52, 1.55, -1.22], materials.metal);
+    box(lift, [0.12, 0.08, 2.25], [side * 0.48, 0.15, -2.1], materials.metal);
+  }
+  box(lift, [1.35, 0.13, 0.18], [0, 2.82, -1.22], materials.metal);
+  return lift;
+}
+
+function buildCheckpoint(materials: MaterialSet): BuiltWorld {
+  const root = new THREE.Group();
+  const collisions: CollisionCircle[] = [];
+  const interactions: InteractionPoint[] = [];
+  baseScene(root, "checkpoint");
+
+  box(root, [24, 0.22, 122], [0, -0.11, -49], materials.asphalt);
+  box(root, [13, 0.12, 122], [-18.5, -0.06, -49], materials.concreteDark);
+  box(root, [13, 0.12, 122], [18.5, -0.06, -49], materials.concreteDark);
+  for (let z = 8; z >= -104; z -= 10) {
+    box(root, [0.14, 0.025, 4.2], [0, 0.025, z], materials.yellow);
+  }
+
+  const arrivalBike = makeMotorcycle(materials, -2.1, 4.1, Math.PI);
+  root.add(arrivalBike);
+  for (let z = 5; z >= -101; z -= 8.5) {
+    for (const side of [-1, 1]) {
+      cylinder(
+        root,
+        [0.065, 0.085],
+        3,
+        [side * 12.8, 1.5, z],
+        materials.metal,
+        [0, 0, 0],
+        10,
+      );
+      for (const y of [0.65, 1.38, 2.12]) {
+        cylinder(
+          root,
+          [0.018, 0.018],
+          8.45,
+          [side * 12.8, y, z - 4.15],
+          materials.metal,
+          [Math.PI / 2, 0, 0],
+          7,
+        );
+      }
+    }
+  }
+
+  root.add(
+    sandbagWall(materials, -7.2, -33, 0.18, 7),
+    sandbagWall(materials, 7.4, -33, -0.16, 7),
+    makeFieldTent(materials, -8.6, -45, Math.PI / 2 + 0.12),
+    makeWatchTower(materials, 9.4, -58),
+  );
+  collisions.push(
+    { x: -7.2, z: -33, radius: 2.7 },
+    { x: 7.4, z: -33, radius: 2.7 },
+    { x: -8.6, z: -45, radius: 3.2 },
+    { x: 9.4, z: -58, radius: 2.1 },
+  );
+
+  const commandSign = textPanel(
+    "BLACKWOOD EVACUATION CONTROL",
+    "#e1e5dc",
+    "rgba(40,54,50,.97)",
+  );
+  commandSign.position.set(-8.45, 3.45, -42);
+  commandSign.rotation.y = Math.PI / 2;
+  commandSign.scale.set(0.82, 0.82, 0.82);
+  root.add(commandSign);
+
+  const ambulance = makeCar(materials, materials.white, 5.2, -49, -0.28);
+  ambulance.scale.set(1.08, 1.28, 1.18);
+  roundedBox(ambulance, [1.05, 0.14, 0.3], [0, 1.74, -0.18], materials.red, 0.04);
+  root.add(ambulance);
+  collisions.push({ x: 5.2, z: -49, radius: 2.7 });
+
+  const gateGenerator = new THREE.Group();
+  gateGenerator.position.set(-8.4, 0, -67);
+  roundedBox(gateGenerator, [2.15, 1.35, 1.3], [0, 0.72, 0], materials.darkGreen, 0.12);
+  for (const side of [-1, 1]) {
+    cylinder(gateGenerator, [0.3, 0.3], 0.24, [side * 0.88, 0.32, 0], materials.rubber, [Math.PI / 2, 0, 0], 18);
+  }
+  box(gateGenerator, [1.18, 0.54, 0.06], [0.2, 0.76, 0.68], materials.metal);
+  root.add(gateGenerator);
+  collisions.push({ x: -8.4, z: -67, radius: 1.5 });
+
+  for (const x of [-9.3, 9.3]) {
+    roundedBox(root, [3.7, 3.2, 4.8], [x, 1.6, -91], materials.brick, 0.08);
+    roundedBox(root, [2.6, 1.2, 0.06], [x, 2.05, -88.55], materials.glass, 0.04);
+    root.add(streetLight(materials, x < 0 ? -5.4 : 5.4, -85, x < 0 ? 1 : -1));
+    collisions.push({ x, z: -91, radius: 2.6 });
+  }
+  for (const x of [-6.1, 6.1]) {
+    cylinder(root, [0.13, 0.17], 4.4, [x, 2.2, -88.8], materials.metal, [0, 0, 0], 12);
+  }
+  box(root, [12.4, 0.34, 0.34], [0, 4.25, -88.8], materials.metal);
+  const gateSign = textPanel("HAVEN ROUTE 9 · NORTH", "#e9e4d2", "rgba(62,50,34,.97)");
+  gateSign.position.set(0, 3.68, -88.55);
+  gateSign.scale.set(0.94, 0.94, 0.94);
+  root.add(gateSign);
+  const gateArm = makeBarrier(materials, 0, -86.8, 0);
+  gateArm.scale.x = 1.65;
+  root.add(gateArm);
+  collisions.push({ x: 0, z: -86.8, radius: 2.5 });
+
+  for (const [x, z, rotation] of [
+    [-4.8, -24, 0.2],
+    [5.1, -25.2, -0.18],
+    [-6.2, -75, 0.35],
+    [6.4, -78, -0.24],
+  ] as const) {
+    root.add(roadCone(materials, x, z, rotation));
+  }
+  root.add(
+    liquidPuddle("#4f1210", 1.8, -55, 1.6, 0.4),
+    shippingCrate(materials, -8.8, -53, 0.08),
+    shippingCrate(materials, -6.9, -53.4, -0.15, 0.82),
+  );
+
+  interactions.push(
+    interactionObject(
+      root,
+      "checkpoint-radio",
+      "Play the final dispatch log",
+      [-8.4, 0, -42],
+      createEquipmentModel("radio", 0.9),
+    ),
+    interactionObject(
+      root,
+      "fuse",
+      "Install the gate fuse",
+      [-8.4, 0, -64.8],
+      createEquipmentModel("fuel", 0.68),
+    ),
+    interactionObject(
+      root,
+      "checkpoint-gate",
+      "Raise the north gate",
+      [0, 0, -84.2],
+      new THREE.Group(),
+    ),
+  );
+
+  return {
+    root,
+    collisions,
+    interactions,
+    start: new THREE.Vector3(1.2, 0, 3.6),
+    bounds: { minX: -11.8, maxX: 11.8, minZ: -84.5, maxZ: 8 },
+  };
+}
+
+function buildDepot(materials: MaterialSet): BuiltWorld {
+  const root = new THREE.Group();
+  const collisions: CollisionCircle[] = [];
+  const interactions: InteractionPoint[] = [];
+  baseScene(root, "depot");
+
+  box(root, [36, 0.22, 116], [0, -0.11, -49], materials.concrete);
+  box(root, [0.45, 8.2, 116], [-18, 4.1, -49], materials.brick);
+  box(root, [0.45, 8.2, 116], [18, 4.1, -49], materials.brick);
+  box(root, [36, 8.2, 0.45], [0, 4.1, -107], materials.brick);
+  box(root, [36, 0.32, 116], [0, 8.05, -49], materials.concreteDark);
+  for (let z = 4; z >= -102; z -= 12) {
+    for (const x of [-9, 0, 9]) {
+      const light = new THREE.PointLight(0xd7e8d8, z < -45 ? 1.2 : 2.6, 15, 2);
+      light.position.set(x, 7.5, z);
+      light.userData.baseIntensity = z < -45 ? 1.2 : 2.6;
+      light.userData.flicker = true;
+      root.add(light);
+      roundedBox(
+        root,
+        [3.6, 0.12, 0.55],
+        [x, 7.82, z],
+        new THREE.MeshStandardMaterial({
+          color: 0xdce8dc,
+          emissive: 0xc9ddcc,
+          emissiveIntensity: z < -45 ? 1.1 : 2.8,
+        }),
+        0.04,
+      );
+    }
+    box(root, [35.4, 0.24, 0.34], [0, 7.72, z - 5.8], materials.metal);
+  }
+
+  const arrivalBike = makeMotorcycle(materials, -2, 4.2, Math.PI);
+  root.add(arrivalBike);
+  const office = new THREE.Group();
+  office.position.set(-12.6, 0, -17);
+  box(office, [8, 3.8, 8], [0, 1.9, 0], materials.brick);
+  for (const localZ of [-2, 0, 2]) {
+    roundedBox(office, [0.06, 1.45, 1.3], [4.04, 2.05, localZ], materials.glass, 0.035);
+  }
+  roundedBox(office, [0.08, 2.35, 1.2], [4.05, 1.2, 3], materials.darkGreen, 0.045);
+  const officeSign = textPanel("FOREMAN · BAY CONTROL", "#e5e4d8", "rgba(45,55,51,.97)");
+  officeSign.rotation.y = -Math.PI / 2;
+  officeSign.position.set(4.1, 3.25, 0);
+  officeSign.scale.set(0.56, 0.56, 0.56);
+  office.add(officeSign);
+  root.add(office);
+  collisions.push({ x: -12.6, z: -17, radius: 4.2 });
+
+  const servicePit = roundedBox(
+    root,
+    [4.5, 0.06, 15],
+    [0, 0.015, -50],
+    new THREE.MeshBasicMaterial({ color: 0x050706 }),
+    0.04,
+  );
+  servicePit.receiveShadow = false;
+  for (const side of [-1, 1]) {
+    box(root, [0.22, 0.25, 15.2], [side * 2.35, 0.12, -50], materials.yellow);
+    cylinder(root, [0.045, 0.045], 15, [side * 2.72, 0.72, -50], materials.metal, [Math.PI / 2, 0, 0], 8);
+  }
+  collisions.push({ x: 0, z: -50, radius: 2.2 });
+
+  root.add(
+    toolBench(materials, 12.8, -27, -Math.PI / 2),
+    toolBench(materials, -12.8, -47, Math.PI / 2),
+    makeForklift(materials, 10.8, -64, -0.28),
+    shippingCrate(materials, -11.5, -34, 0.1),
+    shippingCrate(materials, -13.2, -35.4, -0.18, 0.84),
+    liquidPuddle("#171817", 7.4, -43, 3.8, -0.2),
+    liquidPuddle("#59100d", -5.8, -70, 1.7, 0.44),
+  );
+  collisions.push(
+    { x: 12.8, z: -27, radius: 1.45 },
+    { x: -12.8, z: -47, radius: 1.45 },
+    { x: 10.8, z: -64, radius: 1.8 },
+    { x: -11.8, z: -34.4, radius: 1.4 },
+  );
+
+  const dormantBusLeft = makeBus(materials, -9.2, -80, 0);
+  dormantBusLeft.rotation.z = -0.035;
+  root.add(dormantBusLeft);
+  collisions.push({ x: -9.2, z: -80, radius: 4.8 });
+  const escapeBus = makeBus(materials, 6.5, -91, 0);
+  const routeDisplay = textPanel("HAVEN  ·  ROUTE 9", "#efdda7", "rgba(19,29,25,.98)");
+  routeDisplay.scale.set(0.54, 0.34, 0.54);
+  routeDisplay.position.set(0, 2.72, -4.48);
+  escapeBus.add(routeDisplay);
+  root.add(escapeBus);
+  collisions.push({ x: 6.5, z: -91, radius: 4.8 });
+
+  for (const [x, z] of [
+    [-14.8, -60],
+    [14.8, -42],
+    [-14.8, -92],
+    [14.8, -80],
+  ] as const) {
+    root.add(fireExtinguisher(materials, x, z, x < 0 ? Math.PI / 2 : -Math.PI / 2));
+  }
+
+  interactions.push(
+    interactionObject(
+      root,
+      "depot-key",
+      "Take the foreman's key",
+      [-8.7, 0, -16],
+      createEquipmentModel("radio", 0.72),
+    ),
+    interactionObject(
+      root,
+      "battery",
+      "Lift the charged bus battery",
+      [12.4, 0, -28.4],
+      createEquipmentModel("fuel", 0.82),
+    ),
+    interactionObject(
+      root,
+      "bus",
+      "Board the Route 9 evacuation bus",
+      [6.5, 0, -85.7],
+      new THREE.Group(),
+    ),
+  );
+
+  return {
+    root,
+    collisions,
+    interactions,
+    start: new THREE.Vector3(1.2, 0, 3.4),
+    bounds: { minX: -16.8, maxX: 16.8, minZ: -102, maxZ: 8 },
   };
 }
 
@@ -1317,6 +2293,34 @@ function buildEscape(materials: MaterialSet): BuiltWorld {
   box(root, [16, 0.16, 190], [17, -0.08, -86], materials.concreteDark);
   for (let z = 8; z >= -176; z -= 11) {
     box(root, [0.15, 0.025, 4.6], [0, 0.02, z], materials.yellow);
+  }
+  const convoyBus = makeBus(materials, 0, 14.2, 0);
+  const convoyRoute = textPanel("HAVEN · ROUTE 9", "#efdda7", "rgba(19,29,25,.98)");
+  convoyRoute.scale.set(0.54, 0.34, 0.54);
+  convoyRoute.position.set(0, 2.72, -4.48);
+  convoyBus.add(convoyRoute);
+  root.add(convoyBus);
+
+  const routeSign = textPanel("HAVEN  5 KM", "#e4e6dd", "rgba(33,58,47,.97)");
+  routeSign.position.set(-6.9, 3.3, -12);
+  routeSign.rotation.y = Math.PI / 2;
+  routeSign.scale.set(0.82, 0.82, 0.82);
+  root.add(routeSign);
+  for (let z = -18; z >= -162; z -= 24) {
+    for (const side of [-1, 1]) {
+      box(root, [0.18, 0.42, 18], [side * 8.75, 0.65, z - 8.8], materials.metal);
+      for (let post = 0; post < 4; post += 1) {
+        cylinder(
+          root,
+          [0.055, 0.075],
+          1.25,
+          [side * 8.75, 0.44, z - post * 5.4],
+          materials.metal,
+          [0, 0, 0],
+          8,
+        );
+      }
+    }
   }
   for (let z = 5; z >= -174; z -= 15) {
     root.add(makeTree(materials, -12 - ((Math.abs(z) / 15) % 3) * 2.1, z, 0.8 + (Math.abs(z) % 4) * 0.08));
@@ -1335,11 +2339,35 @@ function buildEscape(materials: MaterialSet): BuiltWorld {
   root.add(bus);
   collisions.push({ x: 4.6, z: -153, radius: 4.7 });
 
+  root.add(
+    utilityPole(materials, -12.2, -34),
+    utilityPole(materials, 12.4, -84, Math.PI),
+    utilityPole(materials, -12.8, -136),
+    liquidPuddle("#29130f", 2.7, -118, 2.4, 0.4),
+  );
+
+  for (const x of [-6.1, 6.1]) {
+    cylinder(root, [0.14, 0.18], 6.2, [x, 3.1, -178], materials.metal, [0, 0, 0], 12);
+  }
+  box(root, [12.4, 0.38, 0.38], [0, 5.85, -178], materials.metal);
+  box(root, [14.5, 4.8, 0.6], [0, 2.4, -181], materials.concreteDark);
+  const havenGate = textPanel("HAVEN NORTHERN GATE", "#e4eae2", "rgba(25,49,42,.98)");
+  havenGate.position.set(0, 5.2, -177.65);
+  havenGate.scale.set(1.22, 1, 1);
+  root.add(havenGate);
+  for (const x of [-5.5, 5.5]) {
+    const flood = new THREE.SpotLight(0xdce8dc, 9, 44, Math.PI / 5, 0.46, 1.3);
+    flood.position.set(x, 5.7, -177.4);
+    flood.target.position.set(x * 0.35, 0, -154);
+    flood.castShadow = true;
+    root.add(flood, flood.target);
+  }
+
   return {
     root,
     collisions,
     interactions,
-    start: new THREE.Vector3(0, 0, 7),
+    start: new THREE.Vector3(1.6, 0, 6.4),
     bounds: { minX: -8.1, maxX: 8.1, minZ: -174, maxZ: 8 },
   };
 }
@@ -1594,9 +2622,13 @@ export function buildWorld(chapter: GameChapter): BuiltWorld {
         ? buildStreet(materials)
         : chapter === "station"
           ? buildStation(materials)
-          : chapter === "escape"
-            ? buildEscape(materials)
-            : buildSurvival(materials);
+          : chapter === "checkpoint"
+            ? buildCheckpoint(materials)
+            : chapter === "depot"
+              ? buildDepot(materials)
+              : chapter === "escape"
+                ? buildEscape(materials)
+                : buildSurvival(materials);
   return built;
 }
 

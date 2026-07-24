@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { clone as cloneSkeleton } from "three/addons/utils/SkeletonUtils.js";
 
-export type AnimatedStyle = "hero" | "maya" | "walker" | "runner";
+export type AnimatedStyle = "hero" | "maya" | "walker" | "runner" | "heavy";
 export type AnimationState =
   | "idle"
   | "walk"
@@ -34,6 +34,7 @@ const MODEL_PATHS: Record<AnimatedStyle, string> = {
   maya: "/models/survivor-lis.gltf",
   walker: "/models/zombie-basic.gltf",
   runner: "/models/zombie-arm.gltf",
+  heavy: "/models/zombie-chubby.gltf",
 };
 
 const modelCache = new Map<string, Promise<LoadedModel>>();
@@ -93,7 +94,7 @@ function cloneMaterials(root: THREE.Object3D, style: AnimatedStyle) {
       if (next instanceof THREE.MeshStandardMaterial) {
         next.roughness = Math.max(next.roughness, 0.68);
         next.envMapIntensity = 0.68;
-        if (style === "walker") {
+        if (style === "walker" || style === "heavy") {
           next.color.multiply(new THREE.Color(0x76806c));
           next.color.offsetHSL(0, -0.16, -0.08);
           next.roughness = 0.9;
@@ -125,7 +126,7 @@ export async function createAnimatedCharacter(
   const model = cloneSkeleton(loaded.scene);
   cloneMaterials(model, style);
 
-  if (style === "walker" || style === "runner") {
+  if (style === "walker" || style === "runner" || style === "heavy") {
     const head = model.getObjectByName("Head");
     head?.scale.multiply(new THREE.Vector3(0.84, 0.92, 0.86));
   }
@@ -133,9 +134,22 @@ export async function createAnimatedCharacter(
   const bounds = new THREE.Box3().setFromObject(model);
   const rawHeight = Math.max(0.01, bounds.max.y - bounds.min.y);
   const targetHeight =
-    style === "hero" ? 2.02 : style === "maya" ? 1.9 : style === "runner" ? 1.93 : 2;
+    style === "hero"
+      ? 2.02
+      : style === "maya"
+        ? 1.9
+        : style === "runner"
+          ? 1.93
+          : style === "heavy"
+            ? 2.18
+            : 2;
   const scale = targetHeight / rawHeight;
-  const bodyWidth = style === "walker" || style === "runner" ? 0.92 : 1;
+  const bodyWidth =
+    style === "heavy"
+      ? 1.08
+      : style === "walker" || style === "runner"
+        ? 0.92
+        : 1;
   model.scale.set(scale * bodyWidth, scale, scale * bodyWidth);
   model.rotation.y = Math.PI;
 

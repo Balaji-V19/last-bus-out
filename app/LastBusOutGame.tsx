@@ -25,7 +25,7 @@ type SaveData = {
   hasPistol?: boolean;
 };
 
-const SAVE_KEY = "last-bus-out-3d-save-v1";
+const SAVE_KEY = "last-bus-out-3d-save-v2";
 
 const CHAPTERS: Record<
   GameChapter,
@@ -52,15 +52,29 @@ const CHAPTERS: Record<
     description:
       "One working pump remains. The generator will bring everything nearby with it.",
   },
+  checkpoint: {
+    kicker: "Day 04 · 19:18",
+    title: "The convoy died here",
+    location: "Blackwood Evacuation Checkpoint",
+    description:
+      "Every abandoned vehicle faces south. Whatever happened here came from the direction of Haven.",
+  },
+  depot: {
+    kicker: "Day 04 · 22:41",
+    title: "The last bus",
+    location: "Northline Transit Depot",
+    description:
+      "Maya knows this depot. One evacuation bus may still run, but something is moving beneath the service floor.",
+  },
   escape: {
-    kicker: "Day 04 · 18:53",
-    title: "The last road",
+    kicker: "Day 05 · 00:06",
+    title: "Road of the living",
     location: "Haven Route 9",
     description:
-      "Haven is beyond the wreckage. Keep moving and do not let the road close around you.",
+      "The bus is carrying everyone you found. Scout the blocked road and keep the route open.",
   },
   survival: {
-    kicker: "Day 05 · 00:17",
+    kicker: "Day 05 · 00:47",
     title: "The night watch",
     location: "Haven Northern Perimeter",
     description:
@@ -86,7 +100,19 @@ const OBJECTIVES: Record<GameChapter, string[]> = {
     "Defend the pump while it fills",
     "Return to the motorcycle",
   ],
-  escape: ["Reach the Haven perimeter"],
+  checkpoint: [
+    "Search the abandoned command post",
+    "Restore power to the security gate",
+    "Survive the floodlight alarm",
+    "Open the north checkpoint",
+  ],
+  depot: [
+    "Find the depot foreman's key",
+    "Recover a charged bus battery",
+    "Clear the maintenance floor",
+    "Board the evacuation bus",
+  ],
+  escape: ["Scout ahead of the bus", "Reach the Haven blast gate"],
   survival: ["Survive the next infected wave"],
 };
 
@@ -111,6 +137,7 @@ export function LastBusOutGame() {
   const killsRef = useRef(0);
   const fuelCompleteRef = useRef(false);
   const escapeCompleteRef = useRef(false);
+  const escapeScoutRef = useRef(false);
   const toastTimerRef = useRef<number | null>(null);
 
   const [mode, setMode] = useState<Mode>("menu");
@@ -134,6 +161,7 @@ export function LastBusOutGame() {
   const [survivalWave, setSurvivalWave] = useState(1);
   const [survivalTime, setSurvivalTime] = useState(0);
   const [survivalRemaining, setSurvivalRemaining] = useState(0);
+  const [dread, setDread] = useState(8);
   const [chapterCard, setChapterCard] = useState(0);
   const [hasSave, setHasSave] = useState(false);
   const [resetToken, setResetToken] = useState(0);
@@ -204,11 +232,13 @@ export function LastBusOutGame() {
       setSurvivalWave(1);
       setSurvivalTime(0);
       setSurvivalRemaining(0);
+      setDread(8);
       setCombatCombo(0);
       setCombatScore(0);
       setStamina(100);
       fuelCompleteRef.current = false;
       escapeCompleteRef.current = false;
+      escapeScoutRef.current = false;
       setResetToken((value) => value + 1);
       setChapterCard((value) => value + 1);
       playSound("objective");
@@ -248,10 +278,12 @@ export function LastBusOutGame() {
     setSurvivalWave(1);
     setSurvivalTime(0);
     setSurvivalRemaining(0);
+    setDread(8);
     setResetToken((value) => value + 1);
     setChapterCard((value) => value + 1);
     fuelCompleteRef.current = false;
     escapeCompleteRef.current = false;
+    escapeScoutRef.current = false;
     playSound("objective");
   }, [playSound, setMode]);
 
@@ -281,6 +313,8 @@ export function LastBusOutGame() {
     setSurvivalWave(1);
     setSurvivalTime(0);
     setSurvivalRemaining(0);
+    setDread(8);
+    escapeScoutRef.current = saved.chapter === "escape" && saved.step > 0;
     playSound("objective");
   }, [playSound, resetRun, setMode]);
 
@@ -336,6 +370,29 @@ export function LastBusOutGame() {
           showToast("Trauma kit packed");
         } else if (id === "bike" && step >= 2) {
           setFuel(100);
+          loadChapter("checkpoint");
+        }
+      } else if (chapter === "checkpoint") {
+        if (id === "checkpoint-radio" && step === 0) {
+          advanceStep(1);
+          showToast("Dispatch log: Haven ordered the convoy gates sealed");
+        } else if (id === "fuse" && step === 1) {
+          advanceStep(2);
+          showToast("Gate power restored · floodlights triggered");
+          playSound("generator");
+        } else if (id === "checkpoint-gate" && step >= 3) {
+          loadChapter("depot");
+        }
+      } else if (chapter === "depot") {
+        if (id === "depot-key" && step === 0) {
+          advanceStep(1);
+          showToast("Foreman's key recovered · Bay 03 unlocked");
+        } else if (id === "battery" && step === 1) {
+          advanceStep(2);
+          showToast("Bus battery secured · something heard the metal fall");
+          playSound("generator");
+        } else if (id === "bus" && step >= 3) {
+          setFuel(82);
           loadChapter("escape");
         }
       }
@@ -385,6 +442,12 @@ export function LastBusOutGame() {
     if (chapter === "hospital" && step === 3) {
       advanceStep(4);
       showToast("Ambulance corridor clear");
+    } else if (chapter === "checkpoint" && step === 2) {
+      advanceStep(3);
+      showToast("Floodlight yard clear · north gate controls available");
+    } else if (chapter === "depot" && step === 2) {
+      advanceStep(3);
+      showToast("Maintenance floor clear · the evacuation bus is ready");
     }
   }, [advanceStep, chapter, showToast, step]);
 
@@ -409,6 +472,16 @@ export function LastBusOutGame() {
   const handleEscapeProgress = useCallback(
     (value: number) => {
       setEscapeProgress(value);
+      if (
+        chapter === "escape" &&
+        step === 0 &&
+        value >= 0.16 &&
+        !escapeScoutRef.current
+      ) {
+        escapeScoutRef.current = true;
+        advanceStep(1);
+        showToast("The bus is following · reach the Haven blast gate");
+      }
       if (value >= 0.985 && !escapeCompleteRef.current) {
         escapeCompleteRef.current = true;
         setMode("ending");
@@ -416,7 +489,7 @@ export function LastBusOutGame() {
         setHasSave(false);
       }
     },
-    [setHasSave, setMode],
+    [advanceStep, chapter, setHasSave, setMode, showToast, step],
   );
 
   const handleSurvivalProgress = useCallback(
@@ -497,7 +570,11 @@ export function LastBusOutGame() {
     axe: beyondHospital || step >= 3,
     medkit: medicine > 0,
     pistol: hasPistol,
-    fuel: chapter === "station" || chapter === "escape",
+    fuel:
+      chapter === "station" ||
+      chapter === "checkpoint" ||
+      chapter === "depot" ||
+      chapter === "escape",
   };
   const objective =
     OBJECTIVES[chapter][clamp(step, 0, OBJECTIVES[chapter].length - 1)];
@@ -543,11 +620,16 @@ export function LastBusOutGame() {
         onFuelProgress={handleFuelProgress}
         onEscapeProgress={handleEscapeProgress}
         onSurvivalProgress={handleSurvivalProgress}
+        onFearChange={setDread}
         onSound={playSound}
       />
       <div className="noise" />
       <div className="vignette" />
       <div className="letterbox" />
+      <div
+        className={`terror-pulse ${dread > 68 ? "active" : ""}`}
+        style={{ opacity: Math.max(0, (dread - 38) / 115) }}
+      />
       {damagePulse > 0 && <div key={damagePulse} className="damage-flash" />}
 
       {mode !== "menu" && mode !== "ending" && (
@@ -596,6 +678,13 @@ export function LastBusOutGame() {
                 <span className="bar-fill stamina" style={{ width: `${stamina}%` }} />
               </span>
               <span>{Math.round(stamina)}</span>
+            </div>
+            <div className="bar-row dread-row">
+              <span>Dread</span>
+              <span className="bar-track">
+                <span className="bar-fill dread" style={{ width: `${dread}%` }} />
+              </span>
+              <span>{dread > 78 ? "RUN" : dread > 46 ? "HIGH" : "LOW"}</span>
             </div>
             <div
               className={`combat-readout ${combatCombo > 0 ? "active" : ""}`}
@@ -750,9 +839,10 @@ export function LastBusOutGame() {
               <span>Road to Haven</span>
             </h1>
             <p className="menu-copy">
-              Enter the hospital, move through the city, search physical spaces,
-              carry real equipment, and fight toward Haven. Finish the four-part
-              story, then continue in an endless night-watch survival mode.
+              Wake inside St. Orison, cross the dead city, uncover why Haven
+              sealed its checkpoint, and recover the last evacuation bus. Six
+              connected story chapters escalate from vulnerable exploration to convoy
+              survival, followed by an endless night watch.
             </p>
             <div className="menu-actions">
               <button className="primary-button" onClick={resetRun}>Begin the escape</button>
@@ -821,11 +911,12 @@ export function LastBusOutGame() {
       {mode === "ending" && (
         <section className="ending-screen">
           <div className="ending-card">
-            <div className="eyebrow">Haven perimeter reached · Day 04</div>
-            <h2>You crossed the city.<br />Not alone.</h2>
+            <div className="eyebrow">Haven northern gate reached · Day 05</div>
+            <h2>The last bus arrived.<br />Haven did not open.</h2>
             <p>
-              The road continues north. Behind you, St. Orison, Mercy District,
-              and Northline have become places you survived—not painted backdrops.
+              The radio message was real, but Haven sealed its northern gate
+              before the convoy fell. Maya and the people aboard the bus now
+              depend on you to hold the perimeter until daylight.
             </p>
             <div className="run-stats">
               <div><strong>{kills}</strong><span>Infected stopped</span></div>

@@ -14,7 +14,11 @@ export type GameSoundEvent =
   | "wave"
   | "gunshot"
   | "dry-fire"
-  | "combo";
+  | "combo"
+  | "heartbeat"
+  | "horror-sting"
+  | "metal-slam"
+  | "radio-static";
 
 export type GameSoundOptions = {
   intensity?: number;
@@ -29,6 +33,8 @@ type MusicChapter =
   | "hospital"
   | "street"
   | "station"
+  | "checkpoint"
+  | "depot"
   | "escape"
   | "survival";
 
@@ -236,6 +242,10 @@ export class SurvivalAudio {
           : 315
         : event === "zombie-alert"
           ? 900
+          : event === "heartbeat"
+            ? 380
+            : event === "radio-static"
+              ? 950
           : 25;
     if (now - (this.lastPlayed.get(event) ?? -Infinity) < minimumGap) return;
     this.lastPlayed.set(event, now);
@@ -382,6 +392,32 @@ export class SurvivalAudio {
     if (event === "combo") {
       this.tone(330, 0.08, 0.025 * intensity, "triangle", pan, 430);
       this.tone(495, 0.1, 0.018 * intensity, "sine", pan, 660, 0.045);
+      return;
+    }
+
+    if (event === "heartbeat") {
+      this.tone(54, 0.13, 0.075 * intensity, "sine", pan, 42);
+      this.tone(48, 0.11, 0.058 * intensity, "sine", pan, 37, 0.18);
+      return;
+    }
+
+    if (event === "horror-sting") {
+      this.tone(610, 0.7, 0.052 * intensity, "sawtooth", pan, 52);
+      this.tone(177, 0.86, 0.064 * intensity, "triangle", pan, 31, 0.03);
+      this.noiseBurst(0.42, 0.054 * intensity, "bandpass", 1820, pan, 0.02, 180);
+      return;
+    }
+
+    if (event === "metal-slam") {
+      this.noiseBurst(0.18, 0.16 * intensity, "highpass", 1250, pan, 0, 210);
+      this.tone(124, 0.72, 0.11 * intensity, "square", pan, 37);
+      this.tone(248, 0.34, 0.045 * intensity, "triangle", pan, 62, 0.03);
+      return;
+    }
+
+    if (event === "radio-static") {
+      this.noiseBurst(0.48, 0.068 * intensity, "bandpass", 2100, pan, 0, 340);
+      this.tone(880, 0.08, 0.026 * intensity, "square", pan, 330, 0.12);
     }
   }
 

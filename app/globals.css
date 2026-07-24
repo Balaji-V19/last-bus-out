@@ -68,7 +68,8 @@ button {
 .noise,
 .vignette,
 .letterbox,
-.damage-flash {
+.damage-flash,
+.terror-pulse {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -98,6 +99,19 @@ button {
     linear-gradient(115deg, transparent 38%, rgba(151, 20, 12, 0.2) 39% 41%, transparent 42%);
   mix-blend-mode: screen;
   animation: damage-impact 520ms ease-out forwards;
+}
+
+.terror-pulse {
+  z-index: 3;
+  background:
+    radial-gradient(circle at 50% 48%, transparent 18%, rgba(26, 0, 0, 0.2) 68%, rgba(82, 3, 0, 0.58) 100%),
+    linear-gradient(90deg, rgba(25, 0, 0, 0.18), transparent 14% 86%, rgba(25, 0, 0, 0.18));
+  mix-blend-mode: screen;
+  transition: opacity 240ms ease;
+}
+
+.terror-pulse.active {
+  animation: terror-heartbeat 820ms ease-in-out infinite;
 }
 
 .top-hud {
@@ -243,6 +257,15 @@ button {
 
 .bar-fill.stamina {
   background: #d4c58f;
+}
+
+.bar-fill.dread {
+  background: linear-gradient(90deg, #79674f, #c75236 68%, #e6281f);
+  box-shadow: 0 0 10px rgba(211, 48, 32, 0.48);
+}
+
+.dread-row {
+  color: #e7c6b5;
 }
 
 .combat-readout {
@@ -724,6 +747,12 @@ button {
   0% { opacity: 0.92; transform: scale(1.025); }
   55% { opacity: 0.42; }
   100% { opacity: 0; transform: scale(1); }
+}
+
+@keyframes terror-heartbeat {
+  0%, 34%, 100% { transform: scale(1); filter: saturate(1); }
+  11% { transform: scale(1.012); filter: saturate(1.35); }
+  22% { transform: scale(1.004); filter: saturate(1.12); }
 }
 
 @media (hover: none), (pointer: coarse) {
