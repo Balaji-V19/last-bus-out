@@ -1,6 +1,11 @@
 import * as THREE from "three";
 
-export type GameChapter = "hospital" | "street" | "station" | "escape";
+export type GameChapter =
+  | "hospital"
+  | "street"
+  | "station"
+  | "escape"
+  | "survival";
 export type EquipmentKind = "axe" | "radio" | "torch" | "medkit" | "pistol" | "fuel";
 
 export type CollisionCircle = {
@@ -922,6 +927,7 @@ function baseScene(root: THREE.Group, chapter: GameChapter) {
     street: [0xd6b882, 0x20231f],
     station: [0xf0a56b, 0x241b17],
     escape: [0xf0a17c, 0x211a1a],
+    survival: [0x819da0, 0x101916],
   };
   const [sky, ground] = hemiColors[chapter];
   root.add(new THREE.HemisphereLight(sky, ground, chapter === "hospital" ? 1.45 : 2.1));
@@ -1338,6 +1344,247 @@ function buildEscape(materials: MaterialSet): BuiltWorld {
   };
 }
 
+function makeFieldTent(
+  materials: MaterialSet,
+  x: number,
+  z: number,
+  rotation = 0,
+) {
+  const root = new THREE.Group();
+  root.position.set(x, 0, z);
+  root.rotation.y = rotation;
+  const canvas = new THREE.Mesh(
+    new THREE.ConeGeometry(3.25, 3.35, 4),
+    materials.fabric,
+  );
+  canvas.position.y = 1.62;
+  canvas.rotation.y = Math.PI / 4;
+  canvas.scale.z = 1.48;
+  canvas.castShadow = true;
+  canvas.receiveShadow = true;
+  root.add(canvas);
+  box(
+    root,
+    [0.9, 1.9, 0.04],
+    [-0.5, 0.98, 2.32],
+    materials.darkGreen,
+    [0, 0, 0.16],
+  );
+  box(
+    root,
+    [0.9, 1.9, 0.04],
+    [0.5, 0.98, 2.32],
+    materials.darkGreen,
+    [0, 0, -0.16],
+  );
+  for (const side of [-1, 1]) {
+    cylinder(
+      root,
+      [0.035, 0.035],
+      3.4,
+      [side * 2.36, 1.55, 0],
+      materials.metal,
+    );
+  }
+  return root;
+}
+
+function makeWatchTower(materials: MaterialSet, x: number, z: number) {
+  const root = new THREE.Group();
+  root.position.set(x, 0, z);
+  for (const px of [-1.05, 1.05]) {
+    for (const pz of [-1.05, 1.05]) {
+      cylinder(
+        root,
+        [0.09, 0.12],
+        5.2,
+        [px, 2.6, pz],
+        materials.metal,
+        [0, 0, 0],
+        10,
+      );
+    }
+  }
+  box(root, [2.75, 0.2, 2.75], [0, 4.75, 0], materials.metal);
+  box(root, [2.55, 1.15, 0.08], [0, 5.38, -1.28], materials.darkGreen);
+  box(root, [0.08, 1.15, 2.55], [-1.28, 5.38, 0], materials.darkGreen);
+  box(root, [0.08, 1.15, 2.55], [1.28, 5.38, 0], materials.darkGreen);
+  box(root, [2.9, 0.16, 2.9], [0, 6.05, 0], materials.concreteDark);
+  for (let rung = 0; rung < 9; rung += 1) {
+    cylinder(
+      root,
+      [0.035, 0.035],
+      1.15,
+      [1.33, 0.55 + rung * 0.48, 1.24],
+      materials.metal,
+      [0, 0, Math.PI / 2],
+      8,
+    );
+  }
+  const flood = new THREE.SpotLight(
+    0xdde8d1,
+    7.5,
+    42,
+    Math.PI / 5,
+    0.55,
+    1.4,
+  );
+  flood.position.set(0, 5.75, 0);
+  flood.target.position.set(-x * 0.4, 0, -z * 0.3);
+  flood.castShadow = true;
+  root.add(flood, flood.target);
+  return root;
+}
+
+function buildSurvival(materials: MaterialSet): BuiltWorld {
+  const root = new THREE.Group();
+  const collisions: CollisionCircle[] = [];
+  const interactions: InteractionPoint[] = [];
+  baseScene(root, "survival");
+
+  box(root, [46, 0.18, 92], [0, -0.12, -38], materials.concreteDark);
+  box(root, [12, 0.12, 92], [0, 0, -38], materials.asphalt);
+  for (let z = 4; z >= -80; z -= 9) {
+    box(root, [0.13, 0.02, 3.6], [0, 0.07, z], materials.yellow);
+  }
+
+  for (const side of [-1, 1]) {
+    const fenceX = side * 21.8;
+    for (let z = 5; z >= -79; z -= 4.2) {
+      cylinder(
+        root,
+        [0.055, 0.075],
+        2.8,
+        [fenceX, 1.4, z],
+        materials.metal,
+        [0, 0, 0],
+        8,
+      );
+      for (const y of [0.65, 1.35, 2.08]) {
+        cylinder(
+          root,
+          [0.018, 0.018],
+          4.25,
+          [fenceX, y, z - 2.05],
+          materials.metal,
+          [Math.PI / 2, 0, 0],
+          6,
+        );
+      }
+    }
+  }
+
+  for (let z = 2; z >= -78; z -= 11) {
+    root.add(
+      makeTree(
+        materials,
+        -27 - (Math.abs(z) % 5),
+        z,
+        0.8 + (Math.abs(z) % 3) * 0.12,
+      ),
+    );
+    root.add(
+      makeTree(
+        materials,
+        27 + (Math.abs(z) % 4),
+        z - 4,
+        0.86 + (Math.abs(z) % 4) * 0.08,
+      ),
+    );
+  }
+
+  root.add(
+    makeFieldTent(materials, -13, -14, 0.16),
+    makeFieldTent(materials, 13.5, -23, -0.2),
+  );
+  collisions.push(
+    { x: -13, z: -14, radius: 3.2 },
+    { x: 13.5, z: -23, radius: 3.2 },
+  );
+
+  root.add(
+    makeWatchTower(materials, -17.5, -65),
+    makeWatchTower(materials, 17.5, -65),
+  );
+  collisions.push(
+    { x: -17.5, z: -65, radius: 2 },
+    { x: 17.5, z: -65, radius: 2 },
+  );
+
+  root.add(
+    makeCar(
+      materials,
+      materials.white,
+      -11.5,
+      -45,
+      Math.PI / 2 + 0.1,
+    ),
+    makeCar(
+      materials,
+      materials.rust,
+      10.5,
+      -56,
+      -Math.PI / 2 - 0.25,
+    ),
+  );
+  collisions.push(
+    { x: -11.5, z: -45, radius: 2.5 },
+    { x: 10.5, z: -56, radius: 2.5 },
+  );
+
+  for (const [x, z] of [
+    [-6, -32],
+    [7, -37],
+    [-7, -71],
+    [7, -75],
+  ] as Array<[number, number]>) {
+    root.add(makeBarrier(materials, x, z, x < 0 ? 0.12 : -0.12));
+    collisions.push({ x, z, radius: 1.65 });
+  }
+
+  root.add(
+    hospitalBed(materials, -14.5, -31, Math.PI / 2),
+    hospitalCart(materials, -17, -34),
+  );
+  collisions.push(
+    { x: -14.5, z: -31, radius: 1.45 },
+    { x: -17, z: -34, radius: 0.75 },
+  );
+
+  for (const x of [-16, 16]) {
+    root.add(streetLight(materials, x, -5, x < 0 ? 1 : -1));
+    root.add(streetLight(materials, x, -48, x < 0 ? 1 : -1));
+  }
+
+  const sign = textPanel(
+    "HAVEN NIGHT WATCH",
+    "#dbe7d8",
+    "rgba(22,43,38,.96)",
+  );
+  sign.position.set(0, 4.1, -79.4);
+  sign.scale.set(1.45, 1.15, 1);
+  root.add(sign);
+  for (const x of [-5.8, 5.8]) {
+    cylinder(
+      root,
+      [0.11, 0.13],
+      5.1,
+      [x, 2.5, -79.6],
+      materials.metal,
+      [0, 0, 0],
+      10,
+    );
+  }
+
+  return {
+    root,
+    collisions,
+    interactions,
+    start: new THREE.Vector3(0, 0, -12),
+    bounds: { minX: -20.5, maxX: 20.5, minZ: -77, maxZ: 5 },
+  };
+}
+
 export function buildWorld(chapter: GameChapter): BuiltWorld {
   const materials = createMaterials();
   const built =
@@ -1347,7 +1594,9 @@ export function buildWorld(chapter: GameChapter): BuiltWorld {
         ? buildStreet(materials)
         : chapter === "station"
           ? buildStation(materials)
-          : buildEscape(materials);
+          : chapter === "escape"
+            ? buildEscape(materials)
+            : buildSurvival(materials);
   return built;
 }
 

@@ -17,6 +17,10 @@ import {
   type AnimatedCharacter,
   type AnimationState,
 } from "./game3d/animatedCharacter";
+import type {
+  GameSoundEvent,
+  GameSoundOptions,
+} from "./game3d/audio";
 import {
   buildWorld,
   disposeWorld,
@@ -41,6 +45,12 @@ type GameViewportProps = {
   onEncounterCleared: () => void;
   onFuelProgress: (value: number) => void;
   onEscapeProgress: (value: number) => void;
+  onSurvivalProgress: (
+    wave: number,
+    seconds: number,
+    remaining: number,
+  ) => void;
+  onSound: (event: GameSoundEvent, options?: GameSoundOptions) => void;
 };
 
 export type GameViewportHandle = {
@@ -230,11 +240,21 @@ export const GameViewport3D = forwardRef<
           ? 0x3f453e
           : props.chapter === "station"
             ? 0x5d3328
-            : 0x49312d,
+            : props.chapter === "survival"
+              ? 0x152321
+              : 0x49312d,
     );
     scene.fog = new THREE.FogExp2(
-      props.chapter === "hospital" ? 0x35433d : 0x6c5a4d,
-      props.chapter === "hospital" ? 0.025 : 0.012,
+      props.chapter === "hospital"
+        ? 0x35433d
+        : props.chapter === "survival"
+          ? 0x243c38
+          : 0x6c5a4d,
+      props.chapter === "hospital"
+        ? 0.025
+        : props.chapter === "survival"
+          ? 0.018
+          : 0.012,
     );
 
     const camera = new THREE.PerspectiveCamera(58, 1, 0.08, 210);
@@ -331,6 +351,12 @@ export const GameViewport3D = forwardRef<
     let encounterWasActive = false;
     let fuelProgress = 0;
     let stationWaveClock = 0;
+    let footstepClock = 0;
+    let zombieVoiceClock = 1.4 + Math.random() * 1.8;
+    let survivalWave = 0;
+    let survivalWaveClock = 1.25;
+    let survivalTime = 0;
+    let survivalReportClock = 0;
     let statsClock = 0;
     let nextEnemyId = 1;
     let elapsedTime = 0;
@@ -405,13 +431,20 @@ export const GameViewport3D = forwardRef<
       root.rotation.y = Math.PI;
       scene.add(root);
       const maxHp = style === "runner" ? 78 : 112;
+      const survivalDifficulty =
+        propsRef.current.chapter === "survival"
+          ? Math.min(0.8, Math.max(0, survivalWave - 1) * 0.055)
+          : 0;
+      const scaledMaxHp = Math.round(maxHp * (1 + survivalDifficulty));
       const healthBar = createHealthBar();
       scene.add(healthBar.group);
       const actor: EnemyActor = {
         id: nextEnemyId++,
-        hp: maxHp,
-        maxHp,
-        speed: style === "runner" ? 2.75 : 1.3,
+        hp: scaledMaxHp,
+        maxHp: scaledMaxHp,
+        speed:
+          (style === "runner" ? 2.75 : 1.3) *
+          (1 + survivalDifficulty * 0.28),
         attackClock: 0.5 + Math.random() * 0.7,
         attackAnimation: 0,
         hitTimer: 0,
@@ -422,6 +455,15 @@ export const GameViewport3D = forwardRef<
         healthBar,
       };
       enemies.push(actor);
+      const spawnDistance = root.position.distanceTo(playerRoot.position);
+      propsRef.current.onSound("zombie-alert", {
+        intensity: THREE.MathUtils.clamp(1 - spawnDistance / 42, 0.14, 0.72),
+        pan: THREE.MathUtils.clamp(
+          (root.position.x - playerRoot.position.x) / 18,
+          -0.9,
+          0.9,
+        ),
+      });
       void createAnimatedCharacter(style).then((character) => {
         if (disposed || !enemies.includes(actor)) {
           disposeAnimatedCharacter(character);
@@ -451,6 +493,9 @@ export const GameViewport3D = forwardRef<
       attackHit = false;
       stamina = Math.max(0, stamina - 12);
       propsRef.current.onStaminaChange(stamina);
+      propsRef.current.onSound("attack-swing", {
+        weapon: propsRef.current.inventory.axe ? "axe" : "unarmed",
+      });
     };
 
     const performDodge = () => {
@@ -464,6 +509,7 @@ export const GameViewport3D = forwardRef<
       dodge = 1;
       stamina = Math.max(0, stamina - 22);
       propsRef.current.onStaminaChange(stamina);
+      propsRef.current.onSound("dodge");
     };
 
     const performInteract = () => {
@@ -729,12 +775,34 @@ export const GameViewport3D = forwardRef<
           playerRoot.position.distanceTo(lastPlayerPosition) /
           Math.max(delta, 0.001);
         lastPlayerPosition.copy(playerRoot.position);
+        if (actualSpeed > 0.18) {
+          footstepClock -= delta;
+          if (footstepClock <= 0) {
+            const surface =
+              current.chapter === "hospital"
+                ? "tile"
+                : current.chapter === "survival"
+                  ? "gravel"
+                  : "asphalt";
+            current.onSound("footstep", {
+              running,
+              surface,
+              intensity: running ? 1 : 0.82,
+              pan: (Math.random() - 0.5) * 0.16,
+            });
+            footstepClock = running ? 0.27 : 0.43;
+          }
+        } else {
+          footstepClock = 0;
+        }
         if (hero) {
           const heroState: AnimationState =
             heroHitTimer > 0.05
               ? "hit"
               : attack > 0
-                ? "attack"
+                ? actualSpeed > 0.36
+                  ? "attackRun"
+                  : "attack"
                 : actualSpeed > 0.12
                   ? running
                     ? "run"
@@ -769,10 +837,25 @@ export const GameViewport3D = forwardRef<
                 direction,
                 current.inventory.axe ? 24 : 13,
               );
+              current.onSound("zombie-hit", {
+                intensity: current.inventory.axe ? 1.05 : 0.78,
+                pan: THREE.MathUtils.clamp(
+                  (enemy.root.position.x - playerRoot.position.x) / 8,
+                  -0.85,
+                  0.85,
+                ),
+              });
               if (enemy.hp <= 0) {
                 enemy.dying = true;
                 enemy.deathTimer = 1.65;
                 enemy.healthBar.group.visible = false;
+                current.onSound("zombie-death", {
+                  pan: THREE.MathUtils.clamp(
+                    (enemy.root.position.x - playerRoot.position.x) / 10,
+                    -0.85,
+                    0.85,
+                  ),
+                });
                 current.onKill();
               }
             }
@@ -831,6 +914,17 @@ export const GameViewport3D = forwardRef<
               attackDirection,
               enemy.character?.style === "runner" ? 15 : 10,
             );
+            current.onSound("zombie-attack", {
+              intensity: enemy.character?.style === "runner" ? 1.08 : 0.86,
+              pan: THREE.MathUtils.clamp(
+                (enemy.root.position.x - playerRoot.position.x) / 7,
+                -0.9,
+                0.9,
+              ),
+            });
+            current.onSound("player-hit", {
+              intensity: enemy.character?.style === "runner" ? 1.08 : 0.88,
+            });
             current.onDamage(
               enemy.character?.style === "runner" ? 12 : 8,
             );
@@ -863,9 +957,92 @@ export const GameViewport3D = forwardRef<
         }
 
         const livingEnemies = enemies.filter((enemy) => !enemy.dying);
+        zombieVoiceClock -= delta;
+        if (livingEnemies.length > 0 && zombieVoiceClock <= 0) {
+          let nearest = livingEnemies[0];
+          let nearestDistance = nearest.root.position.distanceTo(
+            playerRoot.position,
+          );
+          for (const enemy of livingEnemies.slice(1)) {
+            const distance = enemy.root.position.distanceTo(
+              playerRoot.position,
+            );
+            if (distance < nearestDistance) {
+              nearest = enemy;
+              nearestDistance = distance;
+            }
+          }
+          current.onSound("zombie-alert", {
+            intensity: THREE.MathUtils.clamp(
+              1.05 - nearestDistance / 30,
+              0.16,
+              0.9,
+            ),
+            pan: THREE.MathUtils.clamp(
+              (nearest.root.position.x - playerRoot.position.x) / 16,
+              -0.9,
+              0.9,
+            ),
+          });
+          zombieVoiceClock = 3.2 + Math.random() * 4.4;
+        }
         if (encounterWasActive && livingEnemies.length === 0) {
           encounterWasActive = false;
           current.onEncounterCleared();
+        }
+
+        if (current.chapter === "survival") {
+          survivalTime += delta;
+          survivalReportClock += delta;
+          if (livingEnemies.length === 0) {
+            survivalWaveClock -= delta;
+            if (survivalWaveClock <= 0) {
+              survivalWave += 1;
+              survivalWaveClock = 3.6;
+              const enemyCount = Math.min(
+                14,
+                3 + survivalWave + Math.floor(survivalWave / 3),
+              );
+              current.onSound("wave", {
+                intensity: Math.min(1.2, 0.75 + survivalWave * 0.035),
+              });
+              for (let index = 0; index < enemyCount; index += 1) {
+                const edge = index % 4;
+                const along = -69 + Math.random() * 68;
+                const x =
+                  edge === 0
+                    ? -19
+                    : edge === 1
+                      ? 19
+                      : -17 + Math.random() * 34;
+                const z =
+                  edge === 2
+                    ? -74
+                    : edge === 3
+                      ? 2
+                      : along;
+                const runnerChance = Math.min(
+                  0.62,
+                  0.16 + survivalWave * 0.035,
+                );
+                spawnEnemy(
+                  Math.random() < runnerChance ? "runner" : "walker",
+                  x,
+                  z,
+                );
+              }
+            }
+          } else {
+            survivalWaveClock = 3.6;
+          }
+          if (survivalReportClock >= 0.2) {
+            survivalReportClock = 0;
+            current.onSurvivalProgress(
+              Math.max(1, survivalWave),
+              survivalTime,
+              livingEnemies.length,
+            );
+          }
         }
 
         if (current.chapter === "station" && current.step === 1) {

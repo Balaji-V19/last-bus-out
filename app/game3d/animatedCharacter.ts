@@ -8,6 +8,7 @@ export type AnimationState =
   | "walk"
   | "run"
   | "attack"
+  | "attackRun"
   | "hit"
   | "death";
 
@@ -63,6 +64,11 @@ function chooseClip(style: AnimatedStyle, state: AnimationState) {
   if (state === "idle") return style === "walker" ? "Idle_Attack" : "Idle";
   if (state === "walk") return "Walk";
   if (state === "run") return style === "walker" ? "Run_Arms" : "Run";
+  if (state === "attackRun") {
+    if (style === "hero") return "Run_Slash";
+    if (style === "runner") return "Run_Attack";
+    return "Punch";
+  }
   if (state === "attack") {
     if (style === "hero") return "Slash";
     if (style === "runner") return "Run_Attack";
@@ -190,10 +196,14 @@ export function updateAnimatedCharacter(
     const previous = character.actions.get(character.currentAction);
     const next = character.actions.get(nextName);
     if (next) {
-      const oneShot = state === "attack" || state === "hit" || state === "death";
+      const oneShot =
+        state === "attack" ||
+        state === "attackRun" ||
+        state === "hit" ||
+        state === "death";
       next.reset();
       next.setEffectiveTimeScale(
-        state === "attack"
+        state === "attack" || state === "attackRun"
           ? character.style === "hero"
             ? 1.34
             : 1.12

@@ -5,6 +5,11 @@ import {
   GameViewport3D,
   type GameViewportHandle,
 } from "./GameViewport3D";
+import {
+  SurvivalAudio,
+  type GameSoundEvent,
+  type GameSoundOptions,
+} from "./game3d/audio";
 import type { EquipmentKind, GameChapter } from "./game3d/scene";
 
 type Mode = "menu" | "playing" | "paused" | "ending";
@@ -53,6 +58,13 @@ const CHAPTERS: Record<
     description:
       "Haven is beyond the wreckage. Keep moving and do not let the road close around you.",
   },
+  survival: {
+    kicker: "Day 05 · 00:17",
+    title: "The night watch",
+    location: "Haven Northern Perimeter",
+    description:
+      "The route is over, but the perimeter never sleeps. Hold the patrol ground for as long as you can.",
+  },
 };
 
 const OBJECTIVES: Record<GameChapter, string[]> = {
@@ -74,6 +86,7 @@ const OBJECTIVES: Record<GameChapter, string[]> = {
     "Return to the motorcycle",
   ],
   escape: ["Reach the Haven perimeter"],
+  survival: ["Survive the next infected wave"],
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -92,7 +105,7 @@ function getSave(): SaveData | null {
 
 export function LastBusOutGame() {
   const viewportRef = useRef<GameViewportHandle>(null);
-  const audioRef = useRef<AudioContext | null>(null);
+  const audioRef = useRef<SurvivalAudio | null>(null);
   const healthRef = useRef(100);
   const fuelCompleteRef = useRef(false);
   const escapeCompleteRef = useRef(false);
@@ -113,43 +126,24 @@ export function LastBusOutGame() {
   const [prompt, setPrompt] = useState<{ id: string; label: string } | null>(null);
   const [fuelProgress, setFuelProgress] = useState(0);
   const [escapeProgress, setEscapeProgress] = useState(0);
+  const [survivalWave, setSurvivalWave] = useState(1);
+  const [survivalTime, setSurvivalTime] = useState(0);
+  const [survivalRemaining, setSurvivalRemaining] = useState(0);
   const [chapterCard, setChapterCard] = useState(0);
   const [hasSave, setHasSave] = useState(false);
   const [resetToken, setResetToken] = useState(0);
   const [damagePulse, setDamagePulse] = useState(0);
 
-  const playTone = useCallback(
-    (
-      frequency: number,
-      duration = 0.08,
-      volume = 0.035,
-      type: OscillatorType = "sine",
-    ) => {
+  const playSound = useCallback(
+    (event: GameSoundEvent, options?: GameSoundOptions) => {
       if (!soundOn || typeof window === "undefined") return;
       try {
-        const AudioContextClass =
-          window.AudioContext ??
-          (window as typeof window & {
-            webkitAudioContext?: typeof AudioContext;
-          }).webkitAudioContext;
-        if (!AudioContextClass) return;
-        const context = audioRef.current ?? new AudioContextClass();
-        audioRef.current = context;
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
-        oscillator.type = type;
-        oscillator.frequency.setValueAtTime(frequency, context.currentTime);
-        gain.gain.setValueAtTime(volume, context.currentTime);
-        gain.gain.exponentialRampToValueAtTime(
-          0.0001,
-          context.currentTime + duration,
-        );
-        oscillator.connect(gain);
-        gain.connect(context.destination);
-        oscillator.start();
-        oscillator.stop(context.currentTime + duration);
+        const audio = audioRef.current ?? new SurvivalAudio();
+        audioRef.current = audio;
+        audio.setEnabled(soundOn);
+        audio.play(event, options);
       } catch {
-        // Sound remains optional when a browser blocks audio before a user gesture.
+        // Gameplay remains available if a browser denies audio output.
       }
     },
     [soundOn],
@@ -191,23 +185,27 @@ export function LastBusOutGame() {
       setPrompt(null);
       setFuelProgress(0);
       setEscapeProgress(0);
+      setSurvivalWave(1);
+      setSurvivalTime(0);
+      setSurvivalRemaining(0);
       setStamina(100);
       fuelCompleteRef.current = false;
       escapeCompleteRef.current = false;
       setResetToken((value) => value + 1);
       setChapterCard((value) => value + 1);
+      playSound("objective");
       window.setTimeout(() => saveGame(nextChapter, nextStep), 0);
     },
-    [saveGame],
+    [playSound, saveGame],
   );
 
   const advanceStep = useCallback(
     (nextStep: number) => {
       setStep(nextStep);
       saveGame(chapter, nextStep);
-      playTone(620, 0.16, 0.04, "triangle");
+      playSound("objective");
     },
-    [chapter, playTone, saveGame],
+    [chapter, playSound, saveGame],
   );
 
   const resetRun = useCallback(() => {
@@ -225,11 +223,15 @@ export function LastBusOutGame() {
     setPrompt(null);
     setFuelProgress(0);
     setEscapeProgress(0);
+    setSurvivalWave(1);
+    setSurvivalTime(0);
+    setSurvivalRemaining(0);
     setResetToken((value) => value + 1);
     setChapterCard((value) => value + 1);
     fuelCompleteRef.current = false;
     escapeCompleteRef.current = false;
-  }, [setMode]);
+    playSound("objective");
+  }, [playSound, setMode]);
 
   const continueRun = useCallback(() => {
     const saved = getSave();
@@ -250,7 +252,11 @@ export function LastBusOutGame() {
     setStep(saved.step);
     setResetToken((value) => value + 1);
     setChapterCard((value) => value + 1);
-  }, [resetRun, setMode]);
+    setSurvivalWave(1);
+    setSurvivalTime(0);
+    setSurvivalRemaining(0);
+    playSound("objective");
+  }, [playSound, resetRun, setMode]);
 
   const healWithMedicine = useCallback(() => {
     if (medicine <= 0 || healthRef.current >= 100) return;
@@ -259,12 +265,12 @@ export function LastBusOutGame() {
     healthRef.current = nextHealth;
     setHealth(nextHealth);
     showToast("Trauma kit used");
-    playTone(520, 0.18, 0.03, "sine");
-  }, [medicine, playTone, showToast]);
+    playSound("heal");
+  }, [medicine, playSound, showToast]);
 
   const handleInteraction = useCallback(
     (id: string) => {
-      playTone(360, 0.1, 0.045, "square");
+      playSound("pickup");
       if (chapter === "hospital") {
         if (id === "torch" && step === 0) {
           advanceStep(1);
@@ -297,6 +303,7 @@ export function LastBusOutGame() {
         if (id === "generator" && step === 0) {
           advanceStep(1);
           showToast("Generator online · the pump is drawing a crowd");
+          playSound("generator");
         } else if (id === "meds" && medicine === 0) {
           setMedicine(1);
           showToast("Trauma kit packed");
@@ -312,7 +319,7 @@ export function LastBusOutGame() {
       chapter,
       loadChapter,
       medicine,
-      playTone,
+      playSound,
       showToast,
       step,
     ],
@@ -324,13 +331,12 @@ export function LastBusOutGame() {
       healthRef.current = next;
       setHealth(next);
       setDamagePulse((value) => value + 1);
-      playTone(68, 0.13, 0.07, "sawtooth");
       if (next <= 0) {
         setMode("paused");
         showToast("You collapsed · use a trauma kit or restart");
       }
     },
-    [playTone, setMode, showToast],
+    [setMode, showToast],
   );
 
   const handleEncounterCleared = useCallback(() => {
@@ -371,6 +377,34 @@ export function LastBusOutGame() {
     [setHasSave, setMode],
   );
 
+  const handleSurvivalProgress = useCallback(
+    (wave: number, seconds: number, remaining: number) => {
+      setSurvivalWave(wave);
+      setSurvivalTime(seconds);
+      setSurvivalRemaining(remaining);
+    },
+    [],
+  );
+
+  const startEndlessSurvival = useCallback(() => {
+    healthRef.current = 100;
+    setHealth(100);
+    setStamina(100);
+    setMedicine((value) => Math.max(1, value));
+    setFuel(100);
+    setMode("playing");
+    loadChapter("survival");
+    window.setTimeout(
+      () =>
+        saveGame("survival", 0, {
+          health: 100,
+          medicine: Math.max(1, medicine),
+          fuel: 100,
+        }),
+      0,
+    );
+  }, [loadChapter, medicine, saveGame]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -385,6 +419,10 @@ export function LastBusOutGame() {
     const timer = window.setTimeout(() => setHasSave(Boolean(getSave())), 0);
     return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    audioRef.current?.setEnabled(soundOn);
+  }, [soundOn]);
 
   useEffect(
     () => () => {
@@ -439,6 +477,8 @@ export function LastBusOutGame() {
         onEncounterCleared={handleEncounterCleared}
         onFuelProgress={handleFuelProgress}
         onEscapeProgress={handleEscapeProgress}
+        onSurvivalProgress={handleSurvivalProgress}
+        onSound={playSound}
       />
       <div className="noise" />
       <div className="vignette" />
@@ -569,6 +609,27 @@ export function LastBusOutGame() {
             </div>
           )}
 
+          {chapter === "survival" && (
+            <div className="fuel-meter survival-meter">
+              <div className="fuel-head">
+                <span>Night-watch wave</span>
+                <strong>{survivalWave}</strong>
+              </div>
+              <div className="survival-stats">
+                <span>{survivalRemaining} infected active</span>
+                <span>
+                  {Math.floor(survivalTime / 60)
+                    .toString()
+                    .padStart(2, "0")}
+                  :
+                  {Math.floor(survivalTime % 60)
+                    .toString()
+                    .padStart(2, "0")} survived
+                </span>
+              </div>
+            </div>
+          )}
+
           <div className="mobile-controls" aria-label="Touch controls">
             <div className="move-pad">
               <button className="move-button up" aria-label="Move forward" {...moveButton("w")}>▲</button>
@@ -605,7 +666,8 @@ export function LastBusOutGame() {
             </h1>
             <p className="menu-copy">
               Enter the hospital, move through the city, search physical spaces,
-              carry real equipment, and fight your way toward the final evacuation route.
+              carry real equipment, and fight toward Haven. Finish the four-part
+              story, then continue in an endless night-watch survival mode.
             </p>
             <div className="menu-actions">
               <button className="primary-button" onClick={resetRun}>Begin the escape</button>
@@ -645,7 +707,16 @@ export function LastBusOutGame() {
                 </button>
               )}
               {health <= 0 && (
-                <button className="primary-button" onClick={resetRun}>Restart route</button>
+                <button
+                  className="primary-button"
+                  onClick={
+                    chapter === "survival" ? startEndlessSurvival : resetRun
+                  }
+                >
+                  {chapter === "survival"
+                    ? "Restart night watch"
+                    : "Restart route"}
+                </button>
               )}
               <button
                 className="secondary-button"
@@ -675,7 +746,17 @@ export function LastBusOutGame() {
               <div><strong>{rescued ? "1" : "0"}</strong><span>Survivors found</span></div>
               <div><strong>{Math.round(health)}</strong><span>Health remaining</span></div>
             </div>
-            <button className="primary-button" onClick={resetRun}>Run the route again</button>
+            <div className="menu-actions">
+              <button
+                className="primary-button"
+                onClick={startEndlessSurvival}
+              >
+                Continue into endless survival
+              </button>
+              <button className="secondary-button" onClick={resetRun}>
+                Run the story again
+              </button>
+            </div>
           </div>
         </section>
       )}

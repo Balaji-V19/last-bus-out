@@ -423,6 +423,21 @@ button {
   box-shadow: 0 0 12px rgba(240, 182, 60, 0.48);
 }
 
+.survival-meter {
+  border-top-color: #a8cbbf;
+}
+
+.survival-stats {
+  display: grid;
+  gap: 7px;
+  color: rgba(239, 241, 232, 0.76);
+}
+
+.survival-stats span {
+  display: flex;
+  justify-content: space-between;
+}
+
 .look-hint {
   position: absolute;
   left: 50%;

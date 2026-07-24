@@ -10,3 +10,10 @@ Quaternius Zombie Apocalypse Kit.
 
 The models are stored locally so the game does not depend on a remote asset
 server at runtime.
+
+## Audio
+
+The game does not ship third-party sound recordings. Footsteps, combat impacts,
+weapon movement, zombie vocalizations, damage cues, healing, and wave alerts are
+generated locally at runtime by the Web Audio implementation in
+`app/game3d/audio.ts`.
