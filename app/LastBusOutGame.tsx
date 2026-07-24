@@ -34,7 +34,19 @@ type SaveData = {
   rescued: boolean;
   kills: number;
 };
-type SpriteName = "protagonist" | "maya" | "walker" | "runner";
+type SpriteName =
+  | "protagonist"
+  | "maya"
+  | "walker"
+  | "runner"
+  | "protagonistWalk"
+  | "mayaWalk"
+  | "walkerWalk"
+  | "runnerRun"
+  | "envHospital"
+  | "envStreet"
+  | "envStation"
+  | "envEscape";
 
 const SAVE_KEY = "last-bus-out-save-v1";
 const CHAPTERS: Record<
@@ -105,38 +117,11 @@ const INTERACTIONS: Record<Chapter, Interaction[]> = {
   escape: [],
 };
 
-const PROP_LAYOUT: Record<Chapter, Array<Vec & { kind: string; label?: string }>> = {
-  hospital: [
-    { x: -7.5, z: 7, kind: "wall" },
-    { x: 7.5, z: 7, kind: "wall" },
-    { x: -7.5, z: 16, kind: "wall" },
-    { x: 7.5, z: 16, kind: "wall" },
-    { x: -6, z: 24, kind: "bed" },
-    { x: 6, z: 26, kind: "bed" },
-    { x: 0, z: 34, kind: "door", label: "AMBULANCE" },
-  ],
-  street: [
-    { x: -8, z: 8, kind: "car" },
-    { x: 8.5, z: 13, kind: "car" },
-    { x: -7, z: 25, kind: "bus" },
-    { x: 7.5, z: 30, kind: "fire" },
-    { x: -10, z: 18, kind: "building", label: "POLICE" },
-    { x: 11, z: 20, kind: "building", label: "TOWER 05" },
-  ],
-  station: [
-    { x: -7, z: 7, kind: "pump", label: "02" },
-    { x: 0, z: 8, kind: "pump", label: "04" },
-    { x: 7, z: 7, kind: "pump", label: "06" },
-    { x: 0, z: 25, kind: "building", label: "NORTHLINE" },
-    { x: -9, z: 27, kind: "tanker" },
-    { x: 9, z: 25, kind: "barrier" },
-  ],
-  escape: [
-    { x: -8, z: 18, kind: "car" },
-    { x: 7, z: 29, kind: "barrier" },
-    { x: -6, z: 43, kind: "fire" },
-    { x: 8, z: 56, kind: "car" },
-  ],
+const ENVIRONMENT_SPRITES: Record<Chapter, SpriteName> = {
+  hospital: "envHospital",
+  street: "envStreet",
+  station: "envStation",
+  escape: "envEscape",
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -161,6 +146,30 @@ function initialPlayer(chapter: Chapter): Vec {
   return chapter === "station" ? { x: 0, z: 1.5 } : { x: 0, z: 0 };
 }
 
+function drawStripFrame(
+  context: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  frame: number,
+  frameCount: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  const sourceWidth = image.naturalWidth / frameCount;
+  context.drawImage(
+    image,
+    Math.floor(frame % frameCount) * sourceWidth,
+    0,
+    sourceWidth,
+    image.naturalHeight,
+    x,
+    y,
+    width,
+    height,
+  );
+}
+
 export function LastBusOutGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const keysRef = useRef<Record<string, boolean>>({});
@@ -176,6 +185,14 @@ export function LastBusOutGame() {
     maya: null,
     walker: null,
     runner: null,
+    protagonistWalk: null,
+    mayaWalk: null,
+    walkerWalk: null,
+    runnerRun: null,
+    envHospital: null,
+    envStreet: null,
+    envStation: null,
+    envEscape: null,
   });
   const stateRef = useRef({
     player: { x: 0, z: 0, yaw: 0, dodge: 0, attack: 0 },
@@ -207,7 +224,7 @@ export function LastBusOutGame() {
   const [fuelProgress, setFuelProgress] = useState(0);
   const [escapeProgress, setEscapeProgress] = useState(0);
   const [chapterCard, setChapterCard] = useState(0);
-  const [hasSave, setHasSave] = useState(false);
+  const [hasSave, setHasSave] = useState(() => Boolean(getSave()));
 
   const playTone = useCallback(
     (frequency: number, duration = 0.08, volume = 0.035, type: OscillatorType = "sine") => {
@@ -329,15 +346,19 @@ export function LastBusOutGame() {
   }, [loadChapter, resetRun]);
 
   useEffect(() => {
-    setHasSave(Boolean(getSave()));
-  }, []);
-
-  useEffect(() => {
     const spritePaths: Record<SpriteName, string> = {
       protagonist: "/characters/protagonist.png",
       maya: "/characters/maya.png",
       walker: "/characters/walker.png",
       runner: "/characters/runner.png",
+      protagonistWalk: "/animation/protagonist-walk.png",
+      mayaWalk: "/animation/maya-walk.png",
+      walkerWalk: "/animation/walker-walk.png",
+      runnerRun: "/animation/runner-run.png",
+      envHospital: "/environments/hospital.png",
+      envStreet: "/environments/street.png",
+      envStation: "/environments/station.png",
+      envEscape: "/environments/escape.png",
     };
     const images = Object.entries(spritePaths).map(([name, path]) => {
       const image = new Image();
@@ -491,17 +512,17 @@ export function LastBusOutGame() {
     setStamina(staminaRef.current);
     playTone(110, 0.09, 0.06, "sawtooth");
     let struck = false;
-    for (const enemy of runtime.enemies) {
+    runtime.enemies = runtime.enemies.map((enemy) => {
       const d = distance(enemy, runtime.player);
       const angle = Math.atan2(enemy.x - runtime.player.x, enemy.z - runtime.player.z);
       let delta = angle - runtime.player.yaw;
       delta = Math.atan2(Math.sin(delta), Math.cos(delta));
       if (d < 3.2 && Math.abs(delta) < 1.15) {
-        enemy.hp -= 34;
-        enemy.hitFlash = 0.16;
         struck = true;
+        return { ...enemy, hp: enemy.hp - 34, hitFlash: 0.16 };
       }
-    }
+      return enemy;
+    });
     if (struck) playTone(74, 0.12, 0.075, "square");
   }, [chapter, mode, playTone]);
 
@@ -513,7 +534,7 @@ export function LastBusOutGame() {
     playTone(185, 0.08, 0.025, "triangle");
   }, [mode, playTone]);
 
-  const useMedicine = useCallback(() => {
+  const healWithMedicine = useCallback(() => {
     if (medicine <= 0 || health >= 100) return;
     setMedicine((value) => value - 1);
     setHealth((value) => {
@@ -552,95 +573,65 @@ export function LastBusOutGame() {
         };
       };
 
-      const sky = context.createLinearGradient(0, 0, 0, horizon + 50);
-      sky.addColorStop(0, "#0c1212");
-      sky.addColorStop(0.55, palette.sky);
-      sky.addColorStop(1, palette.fog);
-      context.fillStyle = sky;
-      context.fillRect(0, 0, width, horizon + 60);
-
-      context.fillStyle = "rgba(7, 11, 10, .82)";
-      for (let i = 0; i < 11; i += 1) {
-        const buildingWidth = width / 9 + ((i * 17) % 42);
-        const buildingHeight = 36 + ((i * 43) % 105);
-        const x = i * (width / 10) - 18;
-        context.fillRect(x, horizon - buildingHeight, buildingWidth, buildingHeight + 4);
-        if (chapter !== "hospital") {
-          context.fillStyle = i % 4 === 0 ? "rgba(231,115,54,.22)" : "rgba(255,255,255,.05)";
-          for (let row = 0; row < 4; row += 1) {
-            context.fillRect(x + 13, horizon - buildingHeight + 14 + row * 22, 7, 4);
-          }
-          context.fillStyle = "rgba(7, 11, 10, .82)";
+      const environment = spritesRef.current[ENVIRONMENT_SPRITES[chapter]];
+      if (environment?.complete && environment.naturalWidth > 0) {
+        const chapterDistance =
+          chapter === "escape"
+            ? runtime.escapeProgress
+            : clamp(player.z / (chapter === "station" ? 28 : 36), 0, 1);
+        const zoom = 1.04 + chapterDistance * 0.09;
+        const viewAspect = width / height;
+        let sourceWidth = environment.naturalWidth / zoom;
+        let sourceHeight = sourceWidth / viewAspect;
+        if (sourceHeight > environment.naturalHeight / zoom) {
+          sourceHeight = environment.naturalHeight / zoom;
+          sourceWidth = sourceHeight * viewAspect;
         }
+        const roomX = Math.max(0, environment.naturalWidth - sourceWidth);
+        const roomY = Math.max(0, environment.naturalHeight - sourceHeight);
+        const look = clamp(player.x / 10 + player.yaw / 0.55, -1, 1);
+        const sourceX = clamp(
+          roomX / 2 + look * roomX * 0.36,
+          0,
+          Math.max(0, environment.naturalWidth - sourceWidth),
+        );
+        const sourceY = clamp(
+          roomY / 2 + chapterDistance * roomY * 0.2,
+          0,
+          Math.max(0, environment.naturalHeight - sourceHeight),
+        );
+        context.drawImage(
+          environment,
+          sourceX,
+          sourceY,
+          sourceWidth,
+          sourceHeight,
+          0,
+          0,
+          width,
+          height,
+        );
+      } else {
+        const fallback = context.createLinearGradient(0, 0, 0, height);
+        fallback.addColorStop(0, palette.sky);
+        fallback.addColorStop(0.48, palette.fog);
+        fallback.addColorStop(1, "#0b0f0d");
+        context.fillStyle = fallback;
+        context.fillRect(0, 0, width, height);
       }
 
-      if (chapter === "street" || chapter === "station" || chapter === "escape") {
-        context.fillStyle = "rgba(50, 48, 42, .42)";
-        for (let i = 0; i < 5; i += 1) {
-          context.beginPath();
-          context.arc(width * (0.2 + i * 0.17), horizon - 45 - i * 6, 35 + i * 12, 0, Math.PI * 2);
-          context.fill();
-        }
-      }
-
-      const ground = context.createLinearGradient(0, horizon, 0, height);
-      ground.addColorStop(0, palette.fog);
-      ground.addColorStop(0.12, chapter === "hospital" ? "#29332f" : "#373831");
-      ground.addColorStop(1, "#0b0f0d");
-      context.fillStyle = ground;
-      context.fillRect(0, horizon, width, height - horizon);
-
-      context.lineWidth = 1;
-      for (let lane = -12; lane <= 12; lane += 3) {
-        const near = project({ x: lane, z: -5 });
-        const far = project({ x: lane, z: 80 });
-        if (!near || !far) continue;
-        context.strokeStyle =
-          lane === -6 || lane === 6 ? "rgba(235,194,112,.18)" : "rgba(255,255,255,.055)";
-        context.beginPath();
-        context.moveTo(near.x, near.ground);
-        context.lineTo(far.x, far.ground);
-        context.stroke();
-      }
-
-      for (let z = Math.ceil(player.z / 4) * 4; z < player.z + 80; z += 4) {
-        const left = project({ x: player.x - 18, z });
-        const right = project({ x: player.x + 18, z });
-        if (!left || !right) continue;
-        context.strokeStyle = "rgba(255,255,255,.045)";
-        context.beginPath();
-        context.moveTo(left.x, left.ground);
-        context.lineTo(right.x, right.ground);
-        context.stroke();
-      }
-
-      if (chapter !== "hospital") {
-        context.strokeStyle = "rgba(232,191,85,.26)";
-        context.lineWidth = 2;
-        for (let z = Math.ceil(player.z / 9) * 9; z < player.z + 80; z += 9) {
-          const a = project({ x: 0, z });
-          const b = project({ x: 0, z: z + 4 });
-          if (a && b) {
-            context.beginPath();
-            context.moveTo(a.x, a.ground);
-            context.lineTo(b.x, b.ground);
-            context.stroke();
-          }
-        }
-      }
+      const sceneGrade = context.createLinearGradient(0, 0, 0, height);
+      sceneGrade.addColorStop(0, "rgba(5,8,7,.08)");
+      sceneGrade.addColorStop(0.54, "rgba(5,8,7,0)");
+      sceneGrade.addColorStop(1, "rgba(4,7,6,.48)");
+      context.fillStyle = sceneGrade;
+      context.fillRect(0, 0, width, height);
 
       const renderables: Array<
-        | { type: "prop"; data: (typeof PROP_LAYOUT)[Chapter][number]; depth: number }
         | { type: "enemy"; data: Enemy; depth: number }
         | { type: "interaction"; data: Interaction; depth: number }
       > = [];
 
-      for (const prop of PROP_LAYOUT[chapter]) {
-        const point = project(prop);
-        if (point && point.forward > -6 && Math.abs(point.x - width / 2) < width * 1.2) {
-          renderables.push({ type: "prop", data: prop, depth: point.depth });
-        }
-      }
       for (const enemy of runtime.enemies) {
         const point = project(enemy);
         if (point && point.forward > -5) renderables.push({ type: "enemy", data: enemy, depth: point.depth });
@@ -656,65 +647,7 @@ export function LastBusOutGame() {
       renderables.sort((a, b) => b.depth - a.depth);
 
       for (const renderable of renderables) {
-        if (renderable.type === "prop") {
-          const prop = renderable.data;
-          const heights: Record<string, number> = {
-            wall: 3.2,
-            building: 8,
-            door: 4.2,
-            bed: 1,
-            car: 1.6,
-            bus: 3.1,
-            fire: 2,
-            pump: 2.2,
-            tanker: 3.3,
-            barrier: 1.1,
-          };
-          const point = project(prop, heights[prop.kind] ?? 2);
-          if (!point) continue;
-          const scale = point.scale;
-          let propWidth = scale * (prop.kind === "building" ? 7 : prop.kind === "bus" ? 4.5 : 2.4);
-          const propHeight = scale * (heights[prop.kind] ?? 2);
-          propWidth = Math.min(propWidth, width * 0.9);
-          const x = point.x - propWidth / 2;
-          const y = point.ground - propHeight;
-          context.fillStyle =
-            prop.kind === "fire"
-              ? `rgba(228, ${86 + Math.sin(time * 8) * 26}, 31, .9)`
-              : prop.kind === "pump"
-                ? "#ddd5c2"
-                : prop.kind === "car" || prop.kind === "bus" || prop.kind === "tanker"
-                  ? "#252d2a"
-                  : prop.kind === "building"
-                    ? "#151b19"
-                    : "#3b4540";
-          if (prop.kind === "fire") {
-            context.beginPath();
-            context.moveTo(point.x, y);
-            context.lineTo(x + propWidth, point.ground);
-            context.lineTo(x, point.ground);
-            context.closePath();
-            context.fill();
-            context.fillStyle = "rgba(238,173,57,.25)";
-            context.beginPath();
-            context.arc(point.x, point.ground, propWidth, 0, Math.PI * 2);
-            context.fill();
-          } else {
-            context.fillRect(x, y, propWidth, propHeight);
-            context.fillStyle = "rgba(255,255,255,.08)";
-            context.fillRect(x + propWidth * 0.08, y + propHeight * 0.12, propWidth * 0.84, propHeight * 0.13);
-            if (prop.kind === "car" || prop.kind === "bus" || prop.kind === "tanker") {
-              context.fillStyle = "#101514";
-              context.fillRect(x + propWidth * 0.12, y + propHeight * 0.25, propWidth * 0.76, propHeight * 0.32);
-            }
-          }
-          if (prop.label && scale > 12) {
-            context.fillStyle = prop.kind === "pump" ? "#a63226" : "#d4c58f";
-            context.font = `700 ${clamp(scale * 0.3, 8, 18)}px monospace`;
-            context.textAlign = "center";
-            context.fillText(prop.label, point.x, y + propHeight * 0.18);
-          }
-        } else if (renderable.type === "enemy") {
+        if (renderable.type === "enemy") {
           const enemy = renderable.data;
           const point = project(enemy, enemy.kind === "runner" ? 1.75 : 1.95);
           if (!point) continue;
@@ -722,28 +655,37 @@ export function LastBusOutGame() {
           const bodyWidth = bodyHeight * 0.31;
           const sway = Math.sin(time * (enemy.kind === "runner" ? 9 : 4) + enemy.id) * bodyWidth * 0.12;
           const enemySprite = spritesRef.current[enemy.kind];
+          const motionSprite =
+            spritesRef.current[enemy.kind === "runner" ? "runnerRun" : "walkerWalk"];
           context.save();
           context.translate(point.x + sway, point.ground);
           context.fillStyle = "rgba(0,0,0,.28)";
           context.beginPath();
           context.ellipse(0, 2, bodyHeight * 0.2, bodyHeight * 0.055, 0, 0, Math.PI * 2);
           context.fill();
-          if (enemySprite?.complete && enemySprite.naturalWidth > 0) {
-            const spriteSize = bodyHeight * (enemy.kind === "runner" ? 1.26 : 1.18);
+          if (motionSprite?.complete && motionSprite.naturalWidth > 0) {
+            const frameRate = enemy.kind === "runner" ? 9 : 4;
+            const animationFrame = Math.floor(time * frameRate + enemy.id) % 4;
             context.filter =
               enemy.hitFlash > 0
                 ? "brightness(2.1) saturate(.6) sepia(.5)"
                 : enemy.kind === "runner"
                   ? "contrast(1.08) saturate(.92)"
                   : "contrast(1.04) saturate(.82)";
-            context.drawImage(
-              enemySprite,
-              -spriteSize / 2,
-              -spriteSize * 0.98,
-              spriteSize,
-              spriteSize,
+            drawStripFrame(
+              context,
+              motionSprite,
+              animationFrame,
+              4,
+              -bodyHeight * 0.39,
+              -bodyHeight * 1.12,
+              bodyHeight * 0.78,
+              bodyHeight * 1.12,
             );
             context.filter = "none";
+          } else if (enemySprite?.complete && enemySprite.naturalWidth > 0) {
+            const spriteSize = bodyHeight * (enemy.kind === "runner" ? 1.26 : 1.18);
+            context.drawImage(enemySprite, -spriteSize / 2, -spriteSize * 0.98, spriteSize, spriteSize);
           } else {
             context.fillStyle =
               enemy.hitFlash > 0 ? "#e6d6b9" : enemy.kind === "runner" ? "#582a22" : "#202923";
@@ -788,14 +730,17 @@ export function LastBusOutGame() {
       }
 
       if (chapter !== "escape") {
-        const bob =
-          keysRef.current.w || keysRef.current.s || keysRef.current.a || keysRef.current.d
-            ? Math.sin(time * 11) * 3
-            : 0;
+        const isMoving =
+          Boolean(keysRef.current.w) ||
+          Boolean(keysRef.current.s) ||
+          Boolean(keysRef.current.a) ||
+          Boolean(keysRef.current.d);
+        const bob = isMoving ? Math.sin(time * 10) * 1.4 : 0;
         const px = width / 2 - Math.min(width, height) * 0.055;
         const py = height * 0.88 + bob;
         const scale = clamp(Math.min(width, height) / 720, 0.62, 1.3);
         const protagonistSprite = spritesRef.current.protagonist;
+        const protagonistWalk = spritesRef.current.protagonistWalk;
         const protagonistSize = clamp(Math.min(width, height) * 0.39, 205, 400);
         context.save();
         context.translate(px, py);
@@ -803,9 +748,26 @@ export function LastBusOutGame() {
         context.beginPath();
         context.ellipse(0, 5, protagonistSize * 0.2, protagonistSize * 0.045, 0, 0, Math.PI * 2);
         context.fill();
-        if (protagonistSprite?.complete && protagonistSprite.naturalWidth > 0) {
+        if (
+          isMoving &&
+          protagonistWalk?.complete &&
+          protagonistWalk.naturalWidth > 0
+        ) {
           const attackLean = runtime.player.attack > 0 ? -0.075 : 0;
           context.rotate(attackLean);
+          context.filter = runtime.player.dodge > 0 ? "brightness(1.18) saturate(.8)" : "none";
+          drawStripFrame(
+            context,
+            protagonistWalk,
+            Math.floor(runtime.steps * 2.4) % 4,
+            4,
+            -protagonistSize * 0.34,
+            -protagonistSize,
+            protagonistSize * 0.68,
+            protagonistSize,
+          );
+          context.filter = "none";
+        } else if (protagonistSprite?.complete && protagonistSprite.naturalWidth > 0) {
           context.filter = runtime.player.dodge > 0 ? "brightness(1.18) saturate(.8)" : "none";
           context.drawImage(
             protagonistSprite,
@@ -815,27 +777,28 @@ export function LastBusOutGame() {
             protagonistSize,
           );
           context.filter = "none";
-          if (runtime.player.attack > 0) {
-            context.strokeStyle = "rgba(235,205,142,.62)";
-            context.lineWidth = Math.max(2, protagonistSize * 0.012);
-            context.beginPath();
-            context.arc(
-              protagonistSize * 0.17,
-              -protagonistSize * 0.43,
-              protagonistSize * 0.31,
-              -1.15,
-              0.18,
-            );
-            context.stroke();
-          }
         } else {
           context.fillStyle = "#303a35";
           context.fillRect(-31 * scale, -91 * scale, 62 * scale, 86 * scale);
+        }
+        if (runtime.player.attack > 0) {
+          context.strokeStyle = "rgba(235,205,142,.62)";
+          context.lineWidth = Math.max(2, protagonistSize * 0.012);
+          context.beginPath();
+          context.arc(
+            protagonistSize * 0.17,
+            -protagonistSize * 0.43,
+            protagonistSize * 0.31,
+            -1.15,
+            0.18,
+          );
+          context.stroke();
         }
         context.restore();
 
         if (rescued && chapter !== "hospital") {
           const mayaSprite = spritesRef.current.maya;
+          const mayaWalk = spritesRef.current.mayaWalk;
           const mayaSize = clamp(Math.min(width, height) * 0.29, 150, 310);
           const mayaX = width * 0.59;
           const mayaY = height * 0.84 + bob * 0.65;
@@ -845,7 +808,18 @@ export function LastBusOutGame() {
           context.beginPath();
           context.ellipse(0, 3, mayaSize * 0.18, mayaSize * 0.04, 0, 0, Math.PI * 2);
           context.fill();
-          if (mayaSprite?.complete && mayaSprite.naturalWidth > 0) {
+          if (isMoving && mayaWalk?.complete && mayaWalk.naturalWidth > 0) {
+            drawStripFrame(
+              context,
+              mayaWalk,
+              (Math.floor(runtime.steps * 2.4) + 2) % 4,
+              4,
+              -mayaSize * 0.34,
+              -mayaSize,
+              mayaSize * 0.68,
+              mayaSize,
+            );
+          } else if (mayaSprite?.complete && mayaSprite.naturalWidth > 0) {
             context.drawImage(mayaSprite, -mayaSize / 2, -mayaSize, mayaSize, mayaSize);
           } else {
             context.fillStyle = "#264137";
@@ -941,7 +915,7 @@ export function LastBusOutGame() {
         }
         if (keys.h) {
           keys.h = false;
-          useMedicine();
+          healWithMedicine();
         }
 
         let moveX = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
@@ -971,6 +945,7 @@ export function LastBusOutGame() {
 
         if (keys.q) runtime.player.yaw -= dt * 1.5;
         if (keys.r) runtime.player.yaw += dt * 1.5;
+        runtime.player.yaw = clamp(runtime.player.yaw, -0.55, 0.55);
 
         if (sprinting && moving) {
           staminaRef.current = clamp(staminaRef.current - dt * 18, 0, 100);
@@ -1104,7 +1079,7 @@ export function LastBusOutGame() {
     showToast,
     spawnEnemy,
     step,
-    useMedicine,
+    healWithMedicine,
   ]);
 
   const buttonControl = (key: string) => ({
@@ -1131,7 +1106,11 @@ export function LastBusOutGame() {
     const pointer = pointerRef.current;
     if (!pointer || pointer.id !== event.pointerId) return;
     const delta = event.clientX - pointer.x;
-    stateRef.current.player.yaw += delta * 0.0045;
+    stateRef.current.player.yaw = clamp(
+      stateRef.current.player.yaw + delta * 0.0045,
+      -0.55,
+      0.55,
+    );
     pointer.x = event.clientX;
   };
 
@@ -1141,6 +1120,12 @@ export function LastBusOutGame() {
 
   const objective = OBJECTIVES[chapter][clamp(step, 0, OBJECTIVES[chapter].length - 1)];
   const chapterInfo = CHAPTERS[chapter];
+  const beyondHospital = chapter !== "hospital";
+  const hasTorch = beyondHospital || step >= 1;
+  const hasRadio = beyondHospital || step >= 2;
+  const hasAxe = beyondHospital || step >= 3;
+  const hasPistol = ammo > 0;
+  const hasFuelCan = chapter === "station" || chapter === "escape";
 
   return (
     <main className="game-shell" aria-label="Last Bus Out playable survival game">
@@ -1196,10 +1181,48 @@ export function LastBusOutGame() {
               <span className="bar-track"><span className="bar-fill stamina" style={{ width: `${stamina}%` }} /></span>
               <span>{Math.round(stamina)}</span>
             </div>
-            <div className="inventory-line">
-              <span>AXE · READY</span>
-              <span>MED · {medicine}</span>
-              <span>AMMO · {ammo}</span>
+            <div className="equipment-tray" aria-label="Carried equipment">
+              {hasAxe && (
+                <div className="equipment-slot selected" title="Fire axe equipped">
+                  <span className="equipment-icon item-axe" aria-hidden="true" />
+                  <small>Axe</small>
+                </div>
+              )}
+              {hasRadio && (
+                <div className="equipment-slot" title="Emergency radio">
+                  <span className="equipment-icon item-radio" aria-hidden="true" />
+                  <small>Radio</small>
+                </div>
+              )}
+              {hasTorch && (
+                <div className="equipment-slot" title="Torch">
+                  <span className="equipment-icon item-torch" aria-hidden="true" />
+                  <small>Torch</small>
+                </div>
+              )}
+              {medicine > 0 && (
+                <button
+                  className="equipment-slot actionable"
+                  title="Use medical kit"
+                  aria-label={`Use medical kit. ${medicine} remaining`}
+                  onClick={healWithMedicine}
+                >
+                  <span className="equipment-icon item-medkit" aria-hidden="true" />
+                  <small>Med {medicine}</small>
+                </button>
+              )}
+              {hasPistol && (
+                <div className="equipment-slot" title={`${ammo} pistol rounds`}>
+                  <span className="equipment-icon item-pistol" aria-hidden="true" />
+                  <small>{ammo} rnd</small>
+                </div>
+              )}
+              {hasFuelCan && (
+                <div className="equipment-slot" title="Fuel">
+                  <span className="equipment-icon item-fuel" aria-hidden="true" />
+                  <small>{fuel}%</small>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1301,7 +1324,7 @@ export function LastBusOutGame() {
             <div className="pause-actions">
               <button className="primary-button" onClick={() => setMode("playing")}>Return to the road</button>
               {medicine > 0 && health < 100 && (
-                <button className="secondary-button" onClick={useMedicine}>Use bandage · {medicine} left</button>
+                <button className="secondary-button" onClick={healWithMedicine}>Use bandage · {medicine} left</button>
               )}
               <button className="secondary-button" onClick={() => { saveGame(); setMode("menu"); }}>Save & exit</button>
             </div>

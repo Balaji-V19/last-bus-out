@@ -217,15 +217,71 @@ button {
   background: #d4c58f;
 }
 
-.inventory-line {
+.equipment-tray {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-top: 15px;
-  padding-top: 12px;
+  padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.17);
+}
+
+.equipment-slot {
+  position: relative;
+  width: 48px;
+  height: 57px;
+  padding: 2px 2px 4px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+  background: linear-gradient(145deg, rgba(29, 35, 31, 0.92), rgba(7, 11, 9, 0.78));
   color: #dad8cf;
-  font: 10px/1 monospace;
+  box-shadow: inset 0 0 14px rgba(255, 255, 255, 0.025), 0 4px 16px rgba(0, 0, 0, 0.22);
+  font: inherit;
+  text-align: center;
+}
+
+.equipment-slot.selected {
+  border-color: rgba(240, 182, 60, 0.72);
+  box-shadow: inset 0 0 18px rgba(240, 182, 60, 0.08), 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.equipment-slot.actionable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.equipment-slot.actionable:hover {
+  border-color: var(--signal);
+  background: rgba(36, 40, 30, 0.95);
+}
+
+.equipment-icon {
+  display: block;
+  width: 42px;
+  height: 39px;
+  margin: 0 auto;
+  background-image: url("/items/equipment-atlas.png");
+  background-repeat: no-repeat;
+  background-size: 300% 200%;
+  filter: drop-shadow(0 3px 3px rgba(0, 0, 0, 0.58));
+}
+
+.item-axe { background-position: 0 0; }
+.item-radio { background-position: 50% 0; }
+.item-torch { background-position: 100% 0; }
+.item-medkit { background-position: 0 100%; }
+.item-pistol { background-position: 50% 100%; }
+.item-fuel { background-position: 100% 100%; }
+
+.equipment-slot small {
+  display: block;
+  margin-top: -1px;
+  color: #c8c9c0;
+  font: 7px/1 monospace;
   letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .prompt {
@@ -637,12 +693,22 @@ button {
   }
 
   .status-stack {
-    bottom: max(28px, env(safe-area-inset-bottom));
-    width: 34vw;
+    bottom: max(228px, env(safe-area-inset-bottom));
+    width: min(220px, 48vw);
   }
 
-  .inventory-line {
-    display: none;
+  .equipment-tray {
+    gap: 4px;
+  }
+
+  .equipment-slot {
+    width: 40px;
+    height: 48px;
+  }
+
+  .equipment-icon {
+    width: 34px;
+    height: 32px;
   }
 }
 
@@ -750,6 +816,10 @@ button {
 
   .status-stack {
     bottom: 18px;
+  }
+
+  .equipment-tray {
+    display: none;
   }
 
   .prompt {
