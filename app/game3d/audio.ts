@@ -197,10 +197,13 @@ export class SurvivalAudio {
 
   startMusic(chapter: MusicChapter, intensity = 0.55) {
     if (!this.enabled || typeof window === "undefined") return;
-    const targetVolume = 0.14 + clamp(intensity, 0, 1) * 0.08;
+    const normalizedIntensity = clamp(intensity, 0, 1);
+    const targetVolume = 0.22 + normalizedIntensity * 0.18;
+    const playbackRate = 0.985 + normalizedIntensity * 0.025;
     if (this.music) {
       this.music.chapter = chapter;
       this.music.audio.volume = targetVolume;
+      this.music.audio.playbackRate = playbackRate;
       this.music.audio.muted = false;
       if (this.music.audio.paused) {
         void this.music.audio.play().catch(() => {
@@ -210,10 +213,11 @@ export class SurvivalAudio {
       return;
     }
 
-    const audio = new Audio("/audio/creepy-thriller-loop.ogg");
+    const audio = new Audio("/audio/dissonant-horror-loop.ogg");
     audio.loop = true;
     audio.preload = "auto";
     audio.volume = targetVolume;
+    audio.playbackRate = playbackRate;
     this.music = { chapter, audio };
     void audio.play().catch(() => {
       // Browsers may wait for the first gameplay input before starting media.

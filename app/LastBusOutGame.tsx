@@ -545,15 +545,20 @@ export function LastBusOutGame() {
     const activeAudio = audio ?? new SurvivalAudio();
     audioRef.current = activeAudio;
     activeAudio.setEnabled(true);
-    const threat =
+    const chapterThreat =
       chapter === "survival"
         ? clamp(0.48 + survivalRemaining * 0.045, 0.48, 1)
         : clamp(0.48 + (100 - health) / 180, 0.48, 0.92);
+    const threat = clamp(
+      Math.max(chapterThreat, 0.38 + dread / 115),
+      0.48,
+      1,
+    );
     activeAudio.startMusic(
       chapter,
       mode === "paused" ? threat * 0.38 : threat,
     );
-  }, [chapter, health, mode, soundOn, survivalRemaining]);
+  }, [chapter, dread, health, mode, soundOn, survivalRemaining]);
 
   useEffect(
     () => () => {
