@@ -4,11 +4,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Last Bus Out: Road to Haven",
   description:
-    "A playable browser survival vertical slice. Escape the hospital, rescue a survivor, fuel the bike, and outrun the horde.",
+    "An immersive 3D survival journey through an abandoned hospital, ruined city streets, and the final road to Haven.",
   openGraph: {
     title: "Last Bus Out: Road to Haven",
     description:
-      "Every rescue is another reason to keep moving. Play the survival vertical slice.",
+      "Enter a physical 3D world, recover real equipment, rescue a survivor, and cross the city before the route closes.",
     type: "website",
     images: [{ url: "/og.png", width: 1200, height: 630 }],
   },
