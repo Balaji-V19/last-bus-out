@@ -34,6 +34,7 @@ type SaveData = {
   rescued: boolean;
   kills: number;
 };
+type SpriteName = "protagonist" | "maya" | "walker" | "runner";
 
 const SAVE_KEY = "last-bus-out-save-v1";
 const CHAPTERS: Record<
@@ -170,6 +171,12 @@ export function LastBusOutGame() {
   const healthRef = useRef(100);
   const staminaRef = useRef(100);
   const hudClockRef = useRef(0);
+  const spritesRef = useRef<Record<SpriteName, HTMLImageElement | null>>({
+    protagonist: null,
+    maya: null,
+    walker: null,
+    runner: null,
+  });
   const stateRef = useRef({
     player: { x: 0, z: 0, yaw: 0, dodge: 0, attack: 0 },
     enemies: [] as Enemy[],
@@ -323,6 +330,28 @@ export function LastBusOutGame() {
 
   useEffect(() => {
     setHasSave(Boolean(getSave()));
+  }, []);
+
+  useEffect(() => {
+    const spritePaths: Record<SpriteName, string> = {
+      protagonist: "/characters/protagonist.png",
+      maya: "/characters/maya.png",
+      walker: "/characters/walker.png",
+      runner: "/characters/runner.png",
+    };
+    const images = Object.entries(spritePaths).map(([name, path]) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.src = path;
+      spritesRef.current[name as SpriteName] = image;
+      return image;
+    });
+    return () => {
+      for (const image of images) {
+        image.onload = null;
+        image.onerror = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -692,33 +721,46 @@ export function LastBusOutGame() {
           const bodyHeight = clamp(point.scale * (enemy.kind === "runner" ? 1.75 : 1.95), 13, height * 0.6);
           const bodyWidth = bodyHeight * 0.31;
           const sway = Math.sin(time * (enemy.kind === "runner" ? 9 : 4) + enemy.id) * bodyWidth * 0.12;
+          const enemySprite = spritesRef.current[enemy.kind];
           context.save();
           context.translate(point.x + sway, point.ground);
-          context.fillStyle = enemy.hitFlash > 0 ? "#e6d6b9" : enemy.kind === "runner" ? "#582a22" : "#202923";
+          context.fillStyle = "rgba(0,0,0,.28)";
           context.beginPath();
-          context.ellipse(0, -bodyHeight * 0.86, bodyWidth * 0.38, bodyWidth * 0.42, 0, 0, Math.PI * 2);
+          context.ellipse(0, 2, bodyHeight * 0.2, bodyHeight * 0.055, 0, 0, Math.PI * 2);
           context.fill();
-          context.fillRect(-bodyWidth / 2, -bodyHeight * 0.77, bodyWidth, bodyHeight * 0.48);
-          context.strokeStyle = context.fillStyle;
-          context.lineWidth = Math.max(2, bodyWidth * 0.23);
-          context.beginPath();
-          context.moveTo(-bodyWidth * 0.32, -bodyHeight * 0.63);
-          context.lineTo(-bodyWidth * 0.73, -bodyHeight * 0.35);
-          context.moveTo(bodyWidth * 0.32, -bodyHeight * 0.62);
-          context.lineTo(bodyWidth * 0.77, -bodyHeight * 0.42);
-          context.moveTo(-bodyWidth * 0.23, -bodyHeight * 0.3);
-          context.lineTo(-bodyWidth * 0.28, 0);
-          context.moveTo(bodyWidth * 0.23, -bodyHeight * 0.3);
-          context.lineTo(bodyWidth * 0.31, 0);
-          context.stroke();
+          if (enemySprite?.complete && enemySprite.naturalWidth > 0) {
+            const spriteSize = bodyHeight * (enemy.kind === "runner" ? 1.26 : 1.18);
+            context.filter =
+              enemy.hitFlash > 0
+                ? "brightness(2.1) saturate(.6) sepia(.5)"
+                : enemy.kind === "runner"
+                  ? "contrast(1.08) saturate(.92)"
+                  : "contrast(1.04) saturate(.82)";
+            context.drawImage(
+              enemySprite,
+              -spriteSize / 2,
+              -spriteSize * 0.98,
+              spriteSize,
+              spriteSize,
+            );
+            context.filter = "none";
+          } else {
+            context.fillStyle =
+              enemy.hitFlash > 0 ? "#e6d6b9" : enemy.kind === "runner" ? "#582a22" : "#202923";
+            context.beginPath();
+            context.ellipse(0, -bodyHeight * 0.86, bodyWidth * 0.38, bodyWidth * 0.42, 0, 0, Math.PI * 2);
+            context.fill();
+            context.fillRect(-bodyWidth / 2, -bodyHeight * 0.77, bodyWidth, bodyHeight * 0.48);
+          }
           if (point.depth < 18) {
+            const barWidth = bodyHeight * 0.56;
             context.fillStyle = "rgba(0,0,0,.6)";
-            context.fillRect(-bodyWidth, -bodyHeight - 11, bodyWidth * 2, 4);
+            context.fillRect(-barWidth / 2, -bodyHeight - 11, barWidth, 4);
             context.fillStyle = "#b64c38";
             context.fillRect(
-              -bodyWidth,
+              -barWidth / 2,
               -bodyHeight - 11,
-              bodyWidth * 2 * clamp(enemy.hp / enemy.maxHp, 0, 1),
+              barWidth * clamp(enemy.hp / enemy.maxHp, 0, 1),
               4,
             );
           }
@@ -750,47 +792,71 @@ export function LastBusOutGame() {
           keysRef.current.w || keysRef.current.s || keysRef.current.a || keysRef.current.d
             ? Math.sin(time * 11) * 3
             : 0;
-        const px = width / 2 - Math.min(width, height) * 0.035;
-        const py = height * 0.78 + bob;
+        const px = width / 2 - Math.min(width, height) * 0.055;
+        const py = height * 0.88 + bob;
         const scale = clamp(Math.min(width, height) / 720, 0.62, 1.3);
+        const protagonistSprite = spritesRef.current.protagonist;
+        const protagonistSize = clamp(Math.min(width, height) * 0.39, 205, 400);
         context.save();
         context.translate(px, py);
-        context.fillStyle = "#111714";
-        context.strokeStyle = "#070908";
-        context.lineWidth = 4 * scale;
+        context.fillStyle = "rgba(0,0,0,.42)";
         context.beginPath();
-        context.ellipse(0, -112 * scale, 23 * scale, 25 * scale, 0, 0, Math.PI * 2);
+        context.ellipse(0, 5, protagonistSize * 0.2, protagonistSize * 0.045, 0, 0, Math.PI * 2);
         context.fill();
-        context.fillStyle = "#303a35";
-        context.fillRect(-31 * scale, -91 * scale, 62 * scale, 86 * scale);
-        context.fillStyle = "#4b5a51";
-        context.fillRect(-25 * scale, -81 * scale, 50 * scale, 43 * scale);
-        context.fillStyle = "#171d1a";
-        context.fillRect(-27 * scale, -43 * scale, 20 * scale, 62 * scale);
-        context.fillRect(7 * scale, -43 * scale, 20 * scale, 62 * scale);
-        context.strokeStyle = "#bbb29a";
-        context.lineWidth = 7 * scale;
-        context.beginPath();
-        context.moveTo(24 * scale, -75 * scale);
-        context.lineTo(
-          (runtime.player.attack > 0 ? 84 : 51) * scale,
-          (runtime.player.attack > 0 ? -105 : -10) * scale,
-        );
-        context.stroke();
+        if (protagonistSprite?.complete && protagonistSprite.naturalWidth > 0) {
+          const attackLean = runtime.player.attack > 0 ? -0.075 : 0;
+          context.rotate(attackLean);
+          context.filter = runtime.player.dodge > 0 ? "brightness(1.18) saturate(.8)" : "none";
+          context.drawImage(
+            protagonistSprite,
+            -protagonistSize / 2,
+            -protagonistSize,
+            protagonistSize,
+            protagonistSize,
+          );
+          context.filter = "none";
+          if (runtime.player.attack > 0) {
+            context.strokeStyle = "rgba(235,205,142,.62)";
+            context.lineWidth = Math.max(2, protagonistSize * 0.012);
+            context.beginPath();
+            context.arc(
+              protagonistSize * 0.17,
+              -protagonistSize * 0.43,
+              protagonistSize * 0.31,
+              -1.15,
+              0.18,
+            );
+            context.stroke();
+          }
+        } else {
+          context.fillStyle = "#303a35";
+          context.fillRect(-31 * scale, -91 * scale, 62 * scale, 86 * scale);
+        }
         context.restore();
 
         if (rescued && chapter !== "hospital") {
-          context.fillStyle = "#212b27";
+          const mayaSprite = spritesRef.current.maya;
+          const mayaSize = clamp(Math.min(width, height) * 0.29, 150, 310);
+          const mayaX = width * 0.59;
+          const mayaY = height * 0.84 + bob * 0.65;
+          context.save();
+          context.translate(mayaX, mayaY);
+          context.fillStyle = "rgba(0,0,0,.34)";
           context.beginPath();
-          context.arc(width * 0.58, height * 0.7, 15 * scale, 0, Math.PI * 2);
+          context.ellipse(0, 3, mayaSize * 0.18, mayaSize * 0.04, 0, 0, Math.PI * 2);
           context.fill();
-          context.fillRect(width * 0.58 - 18 * scale, height * 0.7 + 11, 36 * scale, 54 * scale);
-          context.fillStyle = "#a84b3c";
-          context.fillRect(width * 0.58 - 16 * scale, height * 0.7 + 18, 32 * scale, 8 * scale);
+          if (mayaSprite?.complete && mayaSprite.naturalWidth > 0) {
+            context.drawImage(mayaSprite, -mayaSize / 2, -mayaSize, mayaSize, mayaSize);
+          } else {
+            context.fillStyle = "#264137";
+            context.fillRect(-18 * scale, -64 * scale, 36 * scale, 64 * scale);
+          }
+          context.restore();
         }
       } else {
         const lean = clamp(player.x / 9, -1, 1);
         const bikeY = height * 0.76;
+        const protagonistSprite = spritesRef.current.protagonist;
         context.save();
         context.translate(width / 2 + lean * 42, bikeY);
         context.rotate(lean * 0.09);
@@ -799,13 +865,19 @@ export function LastBusOutGame() {
         context.ellipse(-34, 27, 27, 10, 0, 0, Math.PI * 2);
         context.ellipse(37, 27, 27, 10, 0, 0, Math.PI * 2);
         context.fill();
+        if (protagonistSprite?.complete && protagonistSprite.naturalWidth > 0) {
+          context.drawImage(protagonistSprite, -75, -143, 150, 150);
+        }
         context.fillStyle = "#8c4a2f";
         context.fillRect(-28, 0, 66, 18);
-        context.fillStyle = "#252d29";
-        context.fillRect(-10, -65, 32, 70);
+        context.fillStyle = "#151b18";
+        context.fillRect(-17, -12, 52, 19);
+        context.strokeStyle = "#313b36";
+        context.lineWidth = 5;
         context.beginPath();
-        context.arc(6, -78, 16, 0, Math.PI * 2);
-        context.fill();
+        context.moveTo(22, -4);
+        context.lineTo(45, -38);
+        context.stroke();
         context.restore();
       }
 
