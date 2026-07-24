@@ -116,6 +116,7 @@ export function LastBusOutGame() {
   const [chapterCard, setChapterCard] = useState(0);
   const [hasSave, setHasSave] = useState(false);
   const [resetToken, setResetToken] = useState(0);
+  const [damagePulse, setDamagePulse] = useState(0);
 
   const playTone = useCallback(
     (
@@ -322,6 +323,7 @@ export function LastBusOutGame() {
       const next = clamp(healthRef.current - amount, 0, 100);
       healthRef.current = next;
       setHealth(next);
+      setDamagePulse((value) => value + 1);
       playTone(68, 0.13, 0.07, "sawtooth");
       if (next <= 0) {
         setMode("paused");
@@ -441,6 +443,7 @@ export function LastBusOutGame() {
       <div className="noise" />
       <div className="vignette" />
       <div className="letterbox" />
+      {damagePulse > 0 && <div key={damagePulse} className="damage-flash" />}
 
       {mode !== "menu" && mode !== "ending" && (
         <>

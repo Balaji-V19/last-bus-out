@@ -22,7 +22,6 @@ export type BuiltWorld = {
   interactions: InteractionPoint[];
   start: THREE.Vector3;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
-  backdrop: THREE.Mesh;
 };
 
 type MaterialSet = {
@@ -40,13 +39,6 @@ type MaterialSet = {
   yellow: THREE.MeshStandardMaterial;
   darkGreen: THREE.MeshStandardMaterial;
   fabric: THREE.MeshStandardMaterial;
-};
-
-const WORLD_IMAGES: Record<GameChapter, string> = {
-  hospital: "/environments/hospital.png",
-  street: "/environments/street.png",
-  station: "/environments/station.png",
-  escape: "/environments/escape.png",
 };
 
 function seededNoise(seed: number) {
@@ -267,22 +259,6 @@ function textPanel(
   return new THREE.Mesh(new THREE.PlaneGeometry(3.6, 0.9), material);
 }
 
-function addBackdrop(root: THREE.Group, chapter: GameChapter) {
-  const texture = new THREE.TextureLoader().load(WORLD_IMAGES[chapter]);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    fog: false,
-    depthWrite: false,
-    toneMapped: false,
-  });
-  const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(88, 49.5), material);
-  backdrop.position.set(0, 19, -104);
-  backdrop.renderOrder = -5;
-  root.add(backdrop);
-  return backdrop;
-}
-
 function addFluorescent(
   parent: THREE.Object3D,
   x: number,
@@ -349,6 +325,312 @@ function hospitalCart(materials: MaterialSet, x: number, z: number) {
     }
   }
   return cart;
+}
+
+function monitorTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 256;
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = "#06110f";
+  context.fillRect(0, 0, 512, 256);
+  context.strokeStyle = "rgba(34,255,161,.12)";
+  context.lineWidth = 1;
+  for (let x = 0; x < 512; x += 32) {
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, 256);
+    context.stroke();
+  }
+  for (let y = 0; y < 256; y += 32) {
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(512, y);
+    context.stroke();
+  }
+  context.strokeStyle = "#48ef9f";
+  context.lineWidth = 7;
+  context.shadowColor = "#2cff98";
+  context.shadowBlur = 16;
+  context.beginPath();
+  context.moveTo(0, 145);
+  context.lineTo(105, 145);
+  context.lineTo(133, 136);
+  context.lineTo(151, 48);
+  context.lineTo(173, 207);
+  context.lineTo(196, 115);
+  context.lineTo(226, 145);
+  context.lineTo(340, 145);
+  context.lineTo(360, 120);
+  context.lineTo(382, 169);
+  context.lineTo(405, 145);
+  context.lineTo(512, 145);
+  context.stroke();
+  context.shadowBlur = 0;
+  context.fillStyle = "#d9ffe9";
+  context.font = "700 42px monospace";
+  context.fillText("72", 410, 62);
+  context.fillStyle = "#80caa7";
+  context.font = "20px monospace";
+  context.fillText("BPM", 413, 88);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function patientMonitor(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const monitor = hospitalCart(materials, x, z);
+  monitor.rotation.y = rotation;
+  box(monitor, [0.88, 0.65, 0.34], [0, 1.74, 0], materials.white);
+  const screen = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.67, 0.37),
+    new THREE.MeshBasicMaterial({ map: monitorTexture(), toneMapped: false }),
+  );
+  screen.position.set(0, 1.78, -0.175);
+  screen.rotation.y = Math.PI;
+  monitor.add(screen);
+  for (let i = 0; i < 5; i += 1) {
+    cylinder(
+      monitor,
+      [0.028, 0.028],
+      0.055,
+      [-0.25 + i * 0.125, 1.49, -0.19],
+      i === 0 ? materials.red : materials.metal,
+      [Math.PI / 2, 0, 0],
+    );
+  }
+  const cableCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.35, 1.65, 0),
+    new THREE.Vector3(0.62, 1.22, 0.12),
+    new THREE.Vector3(0.55, 0.66, 0.25),
+    new THREE.Vector3(0.85, 0.12, 0.35),
+  ]);
+  const cable = new THREE.Mesh(
+    new THREE.TubeGeometry(cableCurve, 22, 0.018, 7, false),
+    materials.rubber,
+  );
+  monitor.add(cable);
+  return monitor;
+}
+
+function ivStand(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const stand = new THREE.Group();
+  stand.position.set(x, 0, z);
+  stand.rotation.y = rotation;
+  cylinder(stand, [0.035, 0.035], 2.15, [0, 1.13, 0], materials.metal);
+  for (let i = 0; i < 5; i += 1) {
+    const angle = (i / 5) * Math.PI * 2;
+    box(
+      stand,
+      [0.52, 0.035, 0.035],
+      [Math.cos(angle) * 0.22, 0.08, Math.sin(angle) * 0.22],
+      materials.metal,
+      [0, -angle, 0],
+    );
+  }
+  box(stand, [0.62, 0.025, 0.025], [0, 2.18, 0], materials.metal);
+  for (const side of [-1, 1]) {
+    const bagMaterial = new THREE.MeshPhysicalMaterial({
+      color: side === 1 ? 0xcbe4dd : 0xe1d4bd,
+      transparent: true,
+      opacity: 0.62,
+      roughness: 0.18,
+      transmission: 0.42,
+    });
+    const bag = new THREE.Mesh(new THREE.CapsuleGeometry(0.12, 0.26, 6, 10), bagMaterial);
+    bag.scale.set(0.62, 1, 0.32);
+    bag.position.set(side * 0.2, 1.88, 0);
+    bag.castShadow = true;
+    stand.add(bag);
+    const tubeCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(side * 0.2, 1.72, 0),
+      new THREE.Vector3(side * 0.31, 1.2, 0.08),
+      new THREE.Vector3(side * 0.22, 0.62, 0.15),
+      new THREE.Vector3(side * 0.43, 0.18, 0.26),
+    ]);
+    stand.add(
+      new THREE.Mesh(
+        new THREE.TubeGeometry(tubeCurve, 18, 0.009, 6, false),
+        new THREE.MeshPhysicalMaterial({
+          color: 0xd6eee8,
+          transparent: true,
+          opacity: 0.58,
+          roughness: 0.1,
+        }),
+      ),
+    );
+  }
+  return stand;
+}
+
+function oxygenTank(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const tank = new THREE.Group();
+  tank.position.set(x, 0, z);
+  tank.rotation.y = rotation;
+  const cylinderBody = cylinder(
+    tank,
+    [0.22, 0.22],
+    1.12,
+    [0, 0.68, 0],
+    new THREE.MeshStandardMaterial({
+      color: 0x4f8e80,
+      roughness: 0.48,
+      metalness: 0.62,
+    }),
+    [0, 0, 0],
+    20,
+  );
+  cylinderBody.castShadow = true;
+  const top = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+    materials.darkGreen,
+  );
+  top.position.y = 1.24;
+  tank.add(top);
+  cylinder(tank, [0.065, 0.065], 0.18, [0, 1.42, 0], materials.metal);
+  const gauge = cylinder(
+    tank,
+    [0.1, 0.1],
+    0.05,
+    [0.14, 1.43, 0],
+    materials.white,
+    [0, 0, Math.PI / 2],
+    18,
+  );
+  gauge.castShadow = true;
+  return tank;
+}
+
+function wheelchair(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const chair = new THREE.Group();
+  chair.position.set(x, 0, z);
+  chair.rotation.y = rotation;
+  for (const side of [-1, 1]) {
+    const wheel = new THREE.Mesh(
+      new THREE.TorusGeometry(0.46, 0.045, 8, 26),
+      materials.rubber,
+    );
+    wheel.position.set(side * 0.44, 0.51, 0.06);
+    wheel.rotation.y = Math.PI / 2;
+    wheel.castShadow = true;
+    chair.add(wheel);
+    const smallWheel = new THREE.Mesh(
+      new THREE.TorusGeometry(0.14, 0.032, 7, 18),
+      materials.rubber,
+    );
+    smallWheel.position.set(side * 0.39, 0.16, -0.62);
+    smallWheel.rotation.y = Math.PI / 2;
+    chair.add(smallWheel);
+    cylinder(chair, [0.025, 0.025], 0.84, [side * 0.4, 0.72, -0.28], materials.metal);
+  }
+  box(chair, [0.78, 0.12, 0.72], [0, 0.68, -0.03], materials.fabric, [-0.12, 0, 0]);
+  box(chair, [0.8, 0.92, 0.1], [0, 1.12, 0.31], materials.fabric, [0.1, 0, 0]);
+  box(chair, [1.08, 0.055, 0.055], [0, 1.28, 0.45], materials.metal);
+  return chair;
+}
+
+function medicalCabinet(materials: MaterialSet, x: number, z: number, rotation = 0) {
+  const cabinet = new THREE.Group();
+  cabinet.position.set(x, 0, z);
+  cabinet.rotation.y = rotation;
+  box(cabinet, [1.35, 2.1, 0.48], [0, 1.05, 0], materials.white);
+  for (const y of [0.42, 0.84, 1.26, 1.68]) {
+    box(cabinet, [1.24, 0.035, 0.43], [0, y, -0.02], materials.metal);
+  }
+  const glassDoor = box(
+    cabinet,
+    [0.58, 1.9, 0.045],
+    [-0.67, 1.08, 0.25],
+    materials.glass,
+    [0, -0.65, 0],
+  );
+  glassDoor.material.transparent = true;
+  for (let shelf = 0; shelf < 4; shelf += 1) {
+    for (let item = 0; item < 5; item += 1) {
+      const color =
+        item % 3 === 0
+          ? materials.red
+          : item % 3 === 1
+            ? materials.darkGreen
+            : materials.white;
+      if ((shelf + item) % 4 === 0) continue;
+      cylinder(
+        cabinet,
+        [0.045 + (item % 2) * 0.018, 0.045 + (item % 2) * 0.018],
+        0.16 + (shelf % 2) * 0.08,
+        [-0.46 + item * 0.22, 0.53 + shelf * 0.42, -0.27],
+        color,
+      );
+    }
+  }
+  return cabinet;
+}
+
+function liquidPuddle(
+  color: string,
+  x: number,
+  z: number,
+  scale: number,
+  rotation = 0,
+) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext("2d")!;
+  context.clearRect(0, 0, 256, 256);
+  const gradient = context.createRadialGradient(128, 128, 12, 128, 128, 118);
+  gradient.addColorStop(0, color);
+  gradient.addColorStop(0.56, color);
+  gradient.addColorStop(0.78, `${color}bb`);
+  gradient.addColorStop(1, `${color}00`);
+  context.fillStyle = gradient;
+  context.beginPath();
+  for (let point = 0; point < 40; point += 1) {
+    const angle = (point / 40) * Math.PI * 2;
+    const radius = 77 + Math.sin(point * 4.7) * 21 + Math.cos(point * 2.1) * 13;
+    const px = 128 + Math.cos(angle) * radius;
+    const py = 128 + Math.sin(angle) * radius;
+    if (point === 0) context.moveTo(px, py);
+    else context.lineTo(px, py);
+  }
+  context.closePath();
+  context.fill();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const puddle = new THREE.Mesh(
+    new THREE.PlaneGeometry(scale, scale * 0.72),
+    new THREE.MeshPhysicalMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+      roughness: 0.24,
+      metalness: 0.08,
+      side: THREE.DoubleSide,
+    }),
+  );
+  puddle.rotation.x = -Math.PI / 2;
+  puddle.rotation.z = rotation;
+  puddle.position.set(x, 0.018, z);
+  puddle.receiveShadow = true;
+  return puddle;
+}
+
+function operatingLamp(materials: MaterialSet, x: number, z: number) {
+  const lamp = new THREE.Group();
+  lamp.position.set(x, 0, z);
+  cylinder(lamp, [0.065, 0.065], 2.1, [0, 3.72, 0], materials.metal, [0, 0, Math.PI / 2]);
+  cylinder(lamp, [0.055, 0.055], 1.4, [1.02, 3.72, 0], materials.metal, [0, 0, 0.75]);
+  const shade = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.55, 0.38, 0.18, 24),
+    materials.white,
+  );
+  shade.position.set(1.5, 3.24, 0);
+  shade.rotation.z = 0.55;
+  lamp.add(shade);
+  const bulb = new THREE.PointLight(0xe5f1dc, 2.4, 8, 2);
+  bulb.position.set(1.36, 3.08, 0);
+  lamp.add(bulb);
+  return lamp;
 }
 
 function makeCar(
@@ -660,7 +942,7 @@ function baseScene(root: THREE.Group, chapter: GameChapter) {
   root.add(sun);
 }
 
-function buildHospital(materials: MaterialSet): Omit<BuiltWorld, "backdrop"> {
+function buildHospital(materials: MaterialSet): BuiltWorld {
   const root = new THREE.Group();
   const collisions: CollisionCircle[] = [];
   const interactions: InteractionPoint[] = [];
@@ -706,6 +988,147 @@ function buildHospital(materials: MaterialSet): Omit<BuiltWorld, "backdrop"> {
   root.add(hospitalCart(materials, 5.7, -17));
   collisions.push({ x: 5.7, z: -17, radius: 0.7 });
 
+  const monitors = [
+    patientMonitor(materials, -6.15, -21, -Math.PI / 2),
+    patientMonitor(materials, 5.85, -39, Math.PI / 2),
+    patientMonitor(materials, -5.9, -72, -Math.PI / 2),
+  ];
+  for (const monitor of monitors) {
+    root.add(monitor);
+    collisions.push({
+      x: monitor.position.x,
+      z: monitor.position.z,
+      radius: 0.72,
+    });
+  }
+
+  for (const [x, z, rotation] of [
+    [-4.8, -30.8, 0.2],
+    [5.1, -50.1, -0.3],
+    [-5.6, -64.7, 0.4],
+    [6.2, -77.2, -0.2],
+    [5.7, -7.8, 0.1],
+  ] as const) {
+    root.add(ivStand(materials, x, z, rotation));
+  }
+
+  for (const [x, z, rotation] of [
+    [-6.7, -12.5, 0],
+    [6.55, -34.5, 0.3],
+    [-6.5, -57.2, -0.3],
+    [6.4, -83.2, 0.2],
+  ] as const) {
+    root.add(oxygenTank(materials, x, z, rotation));
+    collisions.push({ x, z, radius: 0.42 });
+  }
+
+  const wheelchairs = [
+    wheelchair(materials, 5.45, -27.4, -Math.PI / 2 + 0.18),
+    wheelchair(materials, -5.2, -47.5, Math.PI / 2 - 0.36),
+  ];
+  for (const chair of wheelchairs) {
+    root.add(chair);
+    collisions.push({
+      x: chair.position.x,
+      z: chair.position.z,
+      radius: 0.88,
+    });
+  }
+
+  const cabinets = [
+    medicalCabinet(materials, -7.72, -18, Math.PI / 2),
+    medicalCabinet(materials, 7.72, -41, -Math.PI / 2),
+    medicalCabinet(materials, -7.72, -80, Math.PI / 2),
+  ];
+  for (const cabinet of cabinets) root.add(cabinet);
+
+  root.add(operatingLamp(materials, -1.4, -63));
+  root.add(liquidPuddle("#355f55", 2.5, -14, 3.3, 0.28));
+  root.add(liquidPuddle("#6a201b", -1.7, -35, 2.5, -0.42));
+  root.add(liquidPuddle("#4b6256", 3.5, -61.5, 3.7, 0.12));
+  root.add(liquidPuddle("#671b18", -2.7, -76, 2.1, 0.7));
+
+  const curtainMaterial = new THREE.MeshStandardMaterial({
+    color: 0x789a8d,
+    roughness: 0.96,
+    transparent: true,
+    opacity: 0.74,
+    side: THREE.DoubleSide,
+  });
+  for (const [x, z, rotation] of [
+    [-5.8, -37, 0.12],
+    [5.8, -68, -0.16],
+  ] as const) {
+    const rail = new THREE.Mesh(
+      new THREE.TorusGeometry(1.15, 0.025, 8, 30, Math.PI * 1.35),
+      materials.metal,
+    );
+    rail.position.set(x, 2.65, z);
+    rail.rotation.x = Math.PI / 2;
+    rail.rotation.z = rotation;
+    root.add(rail);
+    const curtain = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.15, 1.85, 12, 4),
+      curtainMaterial,
+    );
+    const positions = curtain.geometry.attributes.position;
+    for (let vertex = 0; vertex < positions.count; vertex += 1) {
+      positions.setZ(vertex, Math.sin(positions.getX(vertex) * 13) * 0.055);
+    }
+    positions.needsUpdate = true;
+    curtain.position.set(x, 1.72, z);
+    curtain.rotation.y = Math.PI / 2 + rotation;
+    curtain.castShadow = true;
+    root.add(curtain);
+  }
+
+  for (const side of [-1, 1]) {
+    for (let z = 1; z >= -86; z -= 18) {
+      const pipeMaterial = side === -1 ? materials.metal : materials.rust;
+      cylinder(
+        root,
+        [0.07, 0.07],
+        15.5,
+        [side * 7.55, 4.25, z - 7.4],
+        pipeMaterial,
+        [Math.PI / 2, 0, 0],
+      );
+      for (let offset = 0; offset < 3; offset += 1) {
+        cylinder(
+          root,
+          [0.085, 0.085],
+          0.7,
+          [side * 7.55, 3.9, z - offset * 5],
+          pipeMaterial,
+        );
+      }
+    }
+  }
+
+  for (let i = 0; i < 34; i += 1) {
+    const random = seededNoise(380 + i);
+    const x = -6.8 + random() * 13.6;
+    const z = -6 - random() * 78;
+    if (i % 3 === 0) {
+      cylinder(
+        root,
+        [0.035 + random() * 0.025, 0.035 + random() * 0.025],
+        0.14 + random() * 0.22,
+        [x, 0.05, z],
+        i % 2 === 0 ? materials.white : materials.darkGreen,
+        [Math.PI / 2, random() * Math.PI, 0],
+      );
+    } else {
+      box(
+        root,
+        [0.08 + random() * 0.18, 0.025, 0.08 + random() * 0.24],
+        [x, 0.04, z],
+        i % 4 === 0 ? materials.red : materials.white,
+        [0, random() * Math.PI, 0],
+      );
+    }
+  }
+
   for (let i = 0; i < 44; i += 1) {
     const random = seededNoise(90 + i);
     const debris = box(
@@ -745,7 +1168,7 @@ function buildHospital(materials: MaterialSet): Omit<BuiltWorld, "backdrop"> {
   };
 }
 
-function buildStreet(materials: MaterialSet): Omit<BuiltWorld, "backdrop"> {
+function buildStreet(materials: MaterialSet): BuiltWorld {
   const root = new THREE.Group();
   const collisions: CollisionCircle[] = [];
   const interactions: InteractionPoint[] = [];
@@ -804,7 +1227,7 @@ function buildStreet(materials: MaterialSet): Omit<BuiltWorld, "backdrop"> {
   };
 }
 
-function buildStation(materials: MaterialSet): Omit<BuiltWorld, "backdrop"> {
+function buildStation(materials: MaterialSet): BuiltWorld {
   const root = new THREE.Group();
   const collisions: CollisionCircle[] = [];
   const interactions: InteractionPoint[] = [];
@@ -877,7 +1300,7 @@ function buildStation(materials: MaterialSet): Omit<BuiltWorld, "backdrop"> {
   };
 }
 
-function buildEscape(materials: MaterialSet): Omit<BuiltWorld, "backdrop"> {
+function buildEscape(materials: MaterialSet): BuiltWorld {
   const root = new THREE.Group();
   const collisions: CollisionCircle[] = [];
   const interactions: InteractionPoint[] = [];
@@ -925,8 +1348,7 @@ export function buildWorld(chapter: GameChapter): BuiltWorld {
         : chapter === "station"
           ? buildStation(materials)
           : buildEscape(materials);
-  const backdrop = addBackdrop(built.root, chapter);
-  return { ...built, backdrop };
+  return built;
 }
 
 export function disposeWorld(world: BuiltWorld) {

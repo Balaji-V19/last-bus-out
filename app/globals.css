@@ -67,7 +67,8 @@ button {
 
 .noise,
 .vignette,
-.letterbox {
+.letterbox,
+.damage-flash {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -88,6 +89,15 @@ button {
 .letterbox {
   border-top: clamp(8px, 1.5vh, 16px) solid #050706;
   border-bottom: clamp(8px, 1.5vh, 16px) solid #050706;
+}
+
+.damage-flash {
+  z-index: 4;
+  background:
+    radial-gradient(circle at 50% 54%, transparent 34%, rgba(116, 8, 5, 0.5) 100%),
+    linear-gradient(115deg, transparent 38%, rgba(151, 20, 12, 0.2) 39% 41%, transparent 42%);
+  mix-blend-mode: screen;
+  animation: damage-impact 520ms ease-out forwards;
 }
 
 .top-hud {
@@ -662,6 +672,12 @@ button {
 @keyframes hint-fade {
   0%, 64% { opacity: 1; }
   100% { opacity: 0; }
+}
+
+@keyframes damage-impact {
+  0% { opacity: 0.92; transform: scale(1.025); }
+  55% { opacity: 0.42; }
+  100% { opacity: 0; transform: scale(1); }
 }
 
 @media (hover: none), (pointer: coarse) {
