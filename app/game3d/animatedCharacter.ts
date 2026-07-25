@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { clone as cloneSkeleton } from "three/addons/utils/SkeletonUtils.js";
 
 export type AnimatedStyle = "hero" | "maya" | "walker" | "runner" | "heavy";
 export type AnimationState =
@@ -13,24 +15,24 @@ export type AnimationState =
   | "death";
 
 type CharacterRig = {
-  pelvis: THREE.Group;
-  torso: THREE.Group;
-  chest: THREE.Group;
-  neck: THREE.Group;
-  head: THREE.Group;
-  jaw: THREE.Group;
-  leftShoulder: THREE.Group;
-  rightShoulder: THREE.Group;
-  leftElbow: THREE.Group;
-  rightElbow: THREE.Group;
-  leftWrist: THREE.Group;
-  rightWrist: THREE.Group;
-  leftHip: THREE.Group;
-  rightHip: THREE.Group;
-  leftKnee: THREE.Group;
-  rightKnee: THREE.Group;
-  leftAnkle: THREE.Group;
-  rightAnkle: THREE.Group;
+  pelvis: THREE.Object3D;
+  torso: THREE.Object3D;
+  chest: THREE.Object3D;
+  neck: THREE.Object3D;
+  head: THREE.Object3D;
+  jaw: THREE.Object3D;
+  leftShoulder: THREE.Object3D;
+  rightShoulder: THREE.Object3D;
+  leftElbow: THREE.Object3D;
+  rightElbow: THREE.Object3D;
+  leftWrist: THREE.Object3D;
+  rightWrist: THREE.Object3D;
+  leftHip: THREE.Object3D;
+  rightHip: THREE.Object3D;
+  leftKnee: THREE.Object3D;
+  rightKnee: THREE.Object3D;
+  leftAnkle: THREE.Object3D;
+  rightAnkle: THREE.Object3D;
 };
 
 export type AnimatedCharacter = {
@@ -46,6 +48,18 @@ export type AnimatedCharacter = {
   flashMaterials: THREE.MeshStandardMaterial[];
   detailNodes: THREE.Object3D[];
   detailsVisible: boolean;
+  shadowNodes?: THREE.Mesh[];
+  assetAnimation?: {
+    mixer: THREE.AnimationMixer;
+    actions: Record<AnimationState, THREE.AnimationAction>;
+    activeAction: THREE.AnimationAction;
+    accumulator: number;
+    gripBones: THREE.Object3D[];
+    thumbBones: THREE.Object3D[];
+    nativeClips: boolean;
+  };
+  sharedGeometry?: boolean;
+  equippedWeapon?: "axe" | "pistol" | null;
 };
 
 type CharacterMaterials = {
@@ -141,14 +155,15 @@ function standardMaterial(
   emissive = 0x000000,
   emissiveIntensity = 0,
 ) {
-  const material = new THREE.MeshStandardMaterial({
+  const parameters: THREE.MeshStandardMaterialParameters = {
     color,
     roughness,
     metalness,
-    map,
     emissive,
     emissiveIntensity,
-  });
+  };
+  if (map) parameters.map = map;
+  const material = new THREE.MeshStandardMaterial(parameters);
   material.userData.baseEmissive = emissive;
   material.userData.baseEmissiveIntensity = emissiveIntensity;
   return material;
@@ -505,19 +520,22 @@ function addStrap(
 function createAxe(materials: CharacterMaterials) {
   const axe = new THREE.Group();
   axe.name = "Axe";
-  tapered(axe, 0.026, 0.034, 0.92, materials.webbing, [0, -0.37, 0], [0, 0, 0.06]);
-  rounded(axe, [0.42, 0.16, 0.075], materials.metal, [-0.1, 0.08, 0], 0.025, [0, 0, -0.07]);
+  // The group origin is the lower-hand grip socket. Keeping all geometry
+  // forward of that socket prevents the axe head from pivoting through the
+  // wrist during native attack clips.
+  tapered(axe, 0.021, 0.029, 0.62, materials.webbing, [0, 0.17, 0], [0, 0, 0.045]);
+  rounded(axe, [0.12, 0.08, 0.055], materials.metal, [0.025, 0.48, 0], 0.015, [0, 0, -0.035]);
   const blade = addMesh(
     axe,
-    new THREE.ConeGeometry(0.2, 0.32, 3),
+    new THREE.ConeGeometry(0.17, 0.27, 3),
     materials.metal,
-    [-0.31, 0.07, 0],
+    [-0.19, 0.475, 0],
     [0, 0, -Math.PI / 2],
-    [0.38, 1, 0.35],
+    [0.42, 1, 0.24],
   );
   blade.rotation.y = Math.PI / 2;
-  axe.position.set(0, -0.04, -0.02);
-  axe.rotation.set(0.08, 0.08, -0.08);
+  axe.position.set(0, 0.06, 0);
+  axe.rotation.set(Math.PI / 2, 0.06, -0.04);
   axe.visible = false;
   return axe;
 }
@@ -1489,10 +1507,350 @@ function createOriginalCharacter(style: AnimatedStyle): AnimatedCharacter {
   };
 }
 
+const licensedCharacterLoader = new GLTFLoader();
+const characterAssetRevision = "smooth-finger-rig-20260725";
+type LicensedModelSource = {
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+};
+const licensedModelCache = new Map<string, Promise<LicensedModelSource>>();
+const compatibleClipCache = new Map<string, THREE.AnimationClip>();
+let licensedAnimationCache: Promise<THREE.AnimationClip[]> | null = null;
+
+function localAssetUrl(path: string) {
+  return new URL(path, document.baseURI).toString();
+}
+
+function loadLicensedModel(name: "hero" | "maya" | "infected") {
+  const cached = licensedModelCache.get(name);
+  if (cached) return cached;
+  const loading = licensedCharacterLoader
+    .loadAsync(
+      `${localAssetUrl(`models/characters/${name}.glb`)}?v=${characterAssetRevision}`,
+    )
+    .then((gltf) => ({
+      scene: gltf.scene,
+      animations: gltf.animations,
+    }));
+  licensedModelCache.set(name, loading);
+  return loading;
+}
+
+function loadLicensedAnimations() {
+  licensedAnimationCache ??= Promise.all([
+    licensedCharacterLoader.loadAsync(
+      localAssetUrl("models/characters/human-animations.glb"),
+    ),
+    licensedCharacterLoader.loadAsync(
+      localAssetUrl("models/characters/human-addon-animations.glb"),
+    ),
+  ]).then(([base, addon]) => [...base.animations, ...addon.animations]);
+  return licensedAnimationCache;
+}
+
+function compatibleClip(
+  modelName: string,
+  clip: THREE.AnimationClip,
+  model: THREE.Object3D,
+) {
+  const cacheKey = `${modelName}:${clip.name}`;
+  const cached = compatibleClipCache.get(cacheKey);
+  if (cached) return cached;
+  const nodeNames = new Set<string>();
+  model.traverse((object) => {
+    if (object.name) nodeNames.add(object.name);
+  });
+  const tracks = clip.tracks.filter((track) => {
+    const propertySeparator = track.name.lastIndexOf(".");
+    const nodeName =
+      propertySeparator >= 0
+        ? track.name.slice(0, propertySeparator)
+        : track.name;
+    return nodeNames.has(nodeName);
+  });
+  const compatible = new THREE.AnimationClip(
+    clip.name,
+    clip.duration,
+    tracks,
+    clip.blendMode,
+  );
+  compatibleClipCache.set(cacheKey, compatible);
+  return compatible;
+}
+
+function clipNamesForStyle(
+  style: AnimatedStyle,
+): Record<AnimationState, string> {
+  if (style === "hero") {
+    return {
+      idle: "Idle_Subtle",
+      walk: "Walk",
+      run: "Jog",
+      attack: "Sword_Regular_A",
+      attackRun: "Sword_Regular_B",
+      shoot: "Pistol_Shoot",
+      hit: "Hit_Chest",
+      death: "Death_D",
+    };
+  }
+  if (style === "maya") {
+    return {
+      idle: "Idle_Subtle",
+      walk: "Walk_Female",
+      run: "Run_Female",
+      attack: "Fighting Right Jab",
+      attackRun: "Fighting Left Jab",
+      shoot: "Pistol_Shoot",
+      hit: "Hit_Chest",
+      death: "Death_B",
+    };
+  }
+  if (style === "runner") {
+    return {
+      idle: "Zombie_Idle_Crouch",
+      walk: "Zombie_Walk",
+      run: "Zombie_Walk_2",
+      attack: "Zombie_Scratch",
+      attackRun: "Zombie Yell",
+      shoot: "Zombie Yell",
+      hit: "Hit_Chest",
+      death: "Death_A",
+    };
+  }
+  if (style === "heavy") {
+    return {
+      idle: "Tired Hunched",
+      walk: "Zombie_Walk_2",
+      run: "Zombie_Walk_2",
+      attack: "Attack_Ground_Pound",
+      attackRun: "Zombie_Scratch",
+      shoot: "Zombie Yell",
+      hit: "Hit_Knockback",
+      death: "Death_C",
+    };
+  }
+  return {
+    idle: "Zombie_Idle",
+    walk: "Zombie_Walk_2",
+    run: "Zombie_Walk",
+    attack: "Zombie_Scratch",
+    attackRun: "Zombie Yell",
+    shoot: "Zombie Yell",
+    hit: "Hit_Chest",
+    death: "Death_B",
+  };
+}
+
+function nativeClipNames(): Record<AnimationState, string> {
+  return {
+    idle: "Native_Idle",
+    walk: "Native_Walk",
+    run: "Native_Run",
+    attack: "Native_Attack",
+    attackRun: "Native_AttackRun",
+    shoot: "Native_Shoot",
+    hit: "Native_Hit",
+    death: "Native_Death",
+  };
+}
+
+function assetRig(model: THREE.Object3D): CharacterRig {
+  const node = (...names: string[]) => {
+    for (const name of names) {
+      const match = model.getObjectByName(name);
+      if (match) return match;
+    }
+    return model;
+  };
+  return {
+    pelvis: node("pelvis"),
+    torso: node("spine_01", "pelvis"),
+    chest: node("spine_03", "spine_02"),
+    neck: node("neck_01", "spine_03"),
+    head: node("head"),
+    jaw: node("jaw", "head"),
+    leftShoulder: node("upperarm_l", "clavicle_l"),
+    rightShoulder: node("upperarm_r", "clavicle_r"),
+    leftElbow: node("lowerarm_l"),
+    rightElbow: node("lowerarm_r"),
+    leftWrist: node("hand_l"),
+    rightWrist: node("hand_r"),
+    leftHip: node("thigh_l"),
+    rightHip: node("thigh_r"),
+    leftKnee: node("calf_l"),
+    rightKnee: node("calf_r"),
+    leftAnkle: node("foot_l"),
+    rightAnkle: node("foot_r"),
+  };
+}
+
+async function createLicensedCharacter(
+  style: AnimatedStyle,
+): Promise<AnimatedCharacter> {
+  const modelName =
+    style === "hero" ? "hero" : style === "maya" ? "maya" : "infected";
+  const sourceModel = await loadLicensedModel(modelName);
+  const hasNativeClips = sourceModel.animations.some(
+    (clip) => clip.name === "Native_Idle",
+  );
+  const clips = hasNativeClips
+    ? sourceModel.animations
+    : await loadLicensedAnimations();
+  const assetScene = cloneSkeleton(sourceModel.scene) as THREE.Group;
+  assetScene.name = `Realistic_${style}`;
+
+  const height =
+    style === "hero"
+      ? 1.86
+      : style === "maya"
+        ? 1.76
+        : style === "runner"
+          ? 1.82
+          : style === "heavy"
+            ? 2.02
+            : 1.84;
+  const initialBounds = new THREE.Box3().setFromObject(assetScene);
+  const naturalHeight = Math.max(
+    initialBounds.getSize(new THREE.Vector3()).y,
+    0.01,
+  );
+  assetScene.scale.setScalar(height / naturalHeight);
+  const scaledBounds = new THREE.Box3().setFromObject(assetScene);
+  const center = scaledBounds.getCenter(new THREE.Vector3());
+  assetScene.position.set(-center.x, -scaledBounds.min.y, -center.z);
+  assetScene.rotation.y = Math.PI;
+
+  if (style === "runner") {
+    assetScene.scale.x *= 0.94;
+    assetScene.scale.z *= 0.94;
+  } else if (style === "heavy") {
+    assetScene.scale.x *= 1.14;
+    assetScene.scale.z *= 1.1;
+  }
+
+  const flashMaterialSet = new Set<THREE.MeshStandardMaterial>();
+  const shadowNodes: THREE.Mesh[] = [];
+  assetScene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.castShadow = true;
+    object.receiveShadow = false;
+    object.frustumCulled = true;
+    shadowNodes.push(object);
+    const sourceMaterials = Array.isArray(object.material)
+      ? object.material
+      : [object.material];
+    const clonedMaterials = sourceMaterials.map((sourceMaterial) => {
+      const material = sourceMaterial.clone();
+      if (material instanceof THREE.MeshStandardMaterial) {
+        material.userData.baseEmissive = material.emissive.getHex();
+        material.userData.baseEmissiveIntensity = material.emissiveIntensity;
+        if (!material.name.toLowerCase().includes("eye")) {
+          flashMaterialSet.add(material);
+        }
+      }
+      return material;
+    });
+    object.material = Array.isArray(object.material)
+      ? clonedMaterials
+      : clonedMaterials[0];
+  });
+
+  const rig = assetRig(assetScene);
+  const weaponNodes: THREE.Object3D[] = [];
+  if (style === "hero" || style === "maya") {
+    const equipmentMaterials = createMaterials(style);
+    const axe = createAxe(equipmentMaterials);
+    const pistol = createPistol(equipmentMaterials);
+    axe.scale.setScalar(0.7);
+    axe.position.set(
+      0.006,
+      style === "hero" ? 0.006 : 0.004,
+      0,
+    );
+    axe.rotation.set(Math.PI / 2, 0.06, -0.04);
+    pistol.scale.setScalar(0.72);
+    pistol.position.set(0.025, 0.045, -0.06);
+    pistol.rotation.set(-0.08, Math.PI / 2, -0.06);
+    rig.rightWrist.add(axe, pistol);
+    weaponNodes.push(axe, pistol);
+  }
+
+  const mixer = new THREE.AnimationMixer(assetScene);
+  const names = hasNativeClips ? nativeClipNames() : clipNamesForStyle(style);
+  const actions = {} as Record<AnimationState, THREE.AnimationAction>;
+  for (const state of Object.keys(names) as AnimationState[]) {
+    const clip =
+      THREE.AnimationClip.findByName(clips, names[state]) ??
+      THREE.AnimationClip.findByName(clips, "Idle_A") ??
+      clips[0];
+    if (!clip) throw new Error("The licensed animation library is empty.");
+    const action = mixer.clipAction(
+      compatibleClip(modelName, clip, assetScene),
+      assetScene,
+    );
+    const isOneShot =
+      state === "attack" ||
+      state === "attackRun" ||
+      state === "shoot" ||
+      state === "hit" ||
+      state === "death";
+    action.setLoop(isOneShot ? THREE.LoopOnce : THREE.LoopRepeat, Infinity);
+    action.clampWhenFinished = isOneShot;
+    actions[state] = action;
+  }
+  actions.idle.play();
+  const gripBones: THREE.Object3D[] = [];
+  const thumbBones: THREE.Object3D[] = [];
+  assetScene.traverse((object) => {
+    if (/^(index|middle|ring|pinky)_0[12]_r$/.test(object.name)) {
+      gripBones.push(object);
+    } else if (/^thumb_0[12]_r$/.test(object.name)) {
+      thumbBones.push(object);
+    }
+  });
+
+  const root = new THREE.Group();
+  root.add(assetScene);
+  return {
+    root,
+    model: assetScene,
+    style,
+    height,
+    weaponNodes,
+    rig,
+    elapsed: Math.random() * 5,
+    stateTime: 0,
+    state: "idle",
+    flashMaterials: [...flashMaterialSet],
+    detailNodes: [],
+    detailsVisible: true,
+    shadowNodes,
+    assetAnimation: {
+      mixer,
+      actions,
+      activeAction: actions.idle,
+      accumulator: 0,
+      gripBones,
+      thumbBones,
+      nativeClips: hasNativeClips,
+    },
+    sharedGeometry: true,
+    equippedWeapon: null,
+  };
+}
+
 export async function createAnimatedCharacter(
   style: AnimatedStyle,
 ): Promise<AnimatedCharacter> {
-  return createOriginalCharacter(style);
+  try {
+    return await createLicensedCharacter(style);
+  } catch (error) {
+    console.warn(
+      `Realistic ${style} character could not be loaded; using the local procedural fallback.`,
+      error,
+    );
+    return createOriginalCharacter(style);
+  }
 }
 
 export function setAnimatedEquipment(
@@ -1515,6 +1873,12 @@ export function setAnimatedEquipment(
     const selected = character.model.getObjectByName(selectedName);
     if (selected) selected.visible = true;
   }
+  character.equippedWeapon =
+    selectedName === "Axe"
+      ? "axe"
+      : selectedName === "Pistol"
+        ? "pistol"
+        : null;
 }
 
 function damp(current: number, target: number, delta: number, speed = 12) {
@@ -1810,17 +2174,164 @@ function deathPose(character: AnimatedCharacter, delta: number) {
   );
 }
 
+function applyAssetSecondaryPose(
+  character: AnimatedCharacter,
+  state: AnimationState,
+) {
+  const animation = character.assetAnimation;
+  if (!animation) return;
+  const infected =
+    character.style === "walker" ||
+    character.style === "runner" ||
+    character.style === "heavy";
+  if (infected) {
+    const pace =
+      character.style === "runner"
+        ? 4.1
+        : character.style === "heavy"
+          ? 1.35
+          : 2.05;
+    const lurch = Math.sin(character.elapsed * pace + character.elapsed * 0.17);
+    const twitch = Math.sin(character.elapsed * 7.7 + character.style.length);
+    character.rig.head.rotateZ(lurch * (character.style === "heavy" ? 0.035 : 0.065));
+    character.rig.head.rotateY(twitch > 0.82 ? twitch * 0.045 : 0);
+    character.rig.chest.rotateZ(
+      lurch * (state === "walk" || state === "run" ? 0.045 : 0.018),
+    );
+    if (state === "walk" || state === "run") {
+      character.rig.torso.rotateX(
+        character.style === "runner" ? 0.08 : character.style === "walker" ? 0.045 : 0.025,
+      );
+    }
+    return;
+  }
+
+  const grippingAxe = character.equippedWeapon === "axe";
+  const nativeClips = animation.nativeClips;
+  const nativeAttackGrip =
+    nativeClips && (state === "attack" || state === "attackRun");
+  const fingerCurl = grippingAxe
+    ? nativeClips
+      ? nativeAttackGrip
+        ? 0
+        : -0.75
+      : 0.22
+    : nativeClips
+      ? 0
+      : 0.055;
+  for (const bone of animation.gripBones) {
+    if (nativeClips) bone.rotateZ(fingerCurl);
+    else bone.rotateX(fingerCurl);
+  }
+  for (const bone of animation.thumbBones) {
+    const nativeThumbOffset = nativeAttackGrip ? 0 : 1;
+    bone.rotateY(grippingAxe ? -0.22 * nativeThumbOffset : 0);
+    bone.rotateZ(grippingAxe ? -0.42 * nativeThumbOffset : 0);
+  }
+}
+
 export function updateAnimatedCharacter(
   character: AnimatedCharacter,
   delta: number,
   state: AnimationState,
+  locomotionSpeed?: number,
 ) {
   character.elapsed += delta;
-  if (character.state !== state) {
+  const stateChanged = character.state !== state;
+  if (stateChanged) {
     character.state = state;
     character.stateTime = 0;
   } else {
     character.stateTime += delta;
+  }
+  if (character.assetAnimation) {
+    const animation = character.assetAnimation;
+    if (stateChanged) {
+      const nextAction = animation.actions[state];
+      const previousAction = animation.activeAction;
+      nextAction.enabled = true;
+      nextAction.reset();
+      nextAction.setEffectiveWeight(1);
+      const infected =
+        character.style === "walker" ||
+        character.style === "runner" ||
+        character.style === "heavy";
+      const clipDuration = Math.max(nextAction.getClip().duration, 0.01);
+      const targetOneShotDuration =
+        state === "attack" || state === "attackRun"
+          ? infected
+            ? character.style === "heavy"
+              ? 0.94
+              : 0.7
+            : 0.54
+          : state === "shoot"
+            ? 0.3
+            : state === "hit"
+              ? 0.38
+              : state === "death"
+                ? 1.52
+                : null;
+      const speed =
+        targetOneShotDuration !== null
+          ? clipDuration / targetOneShotDuration
+          : character.style === "runner" && state === "run"
+            ? 2.05
+            : character.style === "heavy" && (state === "walk" || state === "run")
+              ? 0.78
+              : character.style === "walker" && state === "walk"
+                ? 1.18
+                : state === "run"
+                  ? 1.25
+                  : state === "walk"
+                    ? 1.25
+                    : 1;
+      nextAction.setEffectiveTimeScale(speed);
+      if (previousAction !== nextAction) {
+        const fadeDuration =
+          state === "death"
+            ? 0.08
+            : state === "attack" || state === "attackRun"
+              ? 0.07
+              : 0.16;
+        previousAction.fadeOut(fadeDuration);
+        nextAction.fadeIn(fadeDuration);
+      }
+      nextAction.play();
+      animation.activeAction = nextAction;
+    }
+    if (
+      animation.nativeClips &&
+      locomotionSpeed !== undefined &&
+      (state === "walk" || state === "run")
+    ) {
+      const referenceSpeed = state === "walk" ? 1.1 : 3.3;
+      const authoredTimeScale =
+        state === "walk"
+          ? character.style === "maya"
+            ? 1.47
+            : 1.325
+          : character.style === "maya"
+            ? 1.375
+            : 1.25;
+      animation.activeAction.setEffectiveTimeScale(
+        THREE.MathUtils.clamp(
+          authoredTimeScale * (locomotionSpeed / referenceSpeed),
+          0.65,
+          2.1,
+        ),
+      );
+    }
+    animation.accumulator += delta;
+    const updateInterval = character.detailsVisible ? 0 : 1 / 20;
+    if (
+      updateInterval === 0 ||
+      animation.accumulator >= updateInterval
+    ) {
+      animation.mixer.update(animation.accumulator);
+      animation.accumulator = 0;
+      applyAssetSecondaryPose(character, state);
+    }
+    return;
   }
   if (state !== "death") {
     character.model.rotation.z = damp(character.model.rotation.z, 0, delta, 14);
@@ -1868,6 +2379,7 @@ export function setCharacterDetail(
   if (character.detailsVisible === visible) return;
   character.detailsVisible = visible;
   for (const object of character.detailNodes) object.visible = visible;
+  for (const mesh of character.shadowNodes ?? []) mesh.castShadow = visible;
 }
 
 export function disposeAnimatedCharacter(character: AnimatedCharacter) {
@@ -1875,12 +2387,23 @@ export function disposeAnimatedCharacter(character: AnimatedCharacter) {
   const materials = new Set<THREE.Material>();
   character.model.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
-    geometries.add(object.geometry);
+    if (!character.sharedGeometry) geometries.add(object.geometry);
     const objectMaterials = Array.isArray(object.material)
       ? object.material
       : [object.material];
     for (const material of objectMaterials) materials.add(material);
   });
+  if (character.sharedGeometry) {
+    for (const weapon of character.weaponNodes) {
+      weapon.traverse((object) => {
+        if (object instanceof THREE.Mesh) geometries.add(object.geometry);
+      });
+    }
+  }
+  character.assetAnimation?.mixer.stopAllAction();
+  if (character.assetAnimation) {
+    character.assetAnimation.mixer.uncacheRoot(character.model);
+  }
   for (const geometry of geometries) geometry.dispose();
   for (const material of materials) material.dispose();
 }

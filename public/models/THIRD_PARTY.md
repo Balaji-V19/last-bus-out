@@ -1,11 +1,37 @@
-# Original 3D assets
+# 3D asset provenance
 
-The playable rescue officer, paramedic companion, walker, runner, heavy
-infected, carried axe, and pistol are original procedural models created for
-Last Bus Out. Their anatomy, clothing layers, equipment, materials, joint rigs,
-and animations are generated locally by `app/game3d/animatedCharacter.ts`.
+## Realistic characters
 
-The game no longer loads third-party character, animation, or weapon models.
+The realistic human anatomy in `public/models/characters/hero.glb`,
+`maya.glb`, and `infected.glb` is derived from Blender Studio's Human Base
+Meshes asset bundle.
+
+- Creator: Blender Studio
+- Source: https://download.blender.org/demo/bundles/bundles-3.6/
+- Original bundle: `human-base-meshes-bundle-v1.0.0.zip`
+- License: CC0 1.0 Universal / public domain
+- License URL: https://creativecommons.org/publicdomain/zero/1.0/
+- Local changes: A-pose to T-pose conversion, skeletal weight transfer,
+  original rescue/paramedic/infected materials, clothing regions, hair,
+  survival gear, wounds, scale changes, and game-ready GLB export.
+
+The skeleton, `public/models/characters/human-animations.glb`, and
+`human-addon-animations.glb` are from Mesh2Motion. Mesh2Motion explicitly
+publishes its 3D models, rigs, and animations under CC0.
+
+- Creator: Mesh2Motion contributors
+- Source: https://github.com/Mesh2Motion/mesh2motion-app
+- License for art assets: CC0 1.0 Universal / public domain
+- License URL: https://creativecommons.org/publicdomain/zero/1.0/
+- Local changes: the donor mannequin is not shipped as a playable model; its
+  skeleton weights were transferred to the Blender Studio anatomy, and the
+  animation set is mapped to gameplay states in
+  `app/game3d/animatedCharacter.ts`.
+
+The axe, pistol, materials, character equipment, hit response, animation-state
+mapping, model assembly, and performance LOD behavior are original code and
+geometry made for Last Bus Out. The earlier fully procedural characters remain
+as an offline-safe fallback if a GLB cannot load.
 
 ## Audio
 

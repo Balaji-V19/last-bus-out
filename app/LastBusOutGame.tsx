@@ -87,7 +87,9 @@ const OBJECTIVES: Record<GameChapter, string[]> = {
     "Find a working light",
     "Recover the emergency radio",
     "Take the fire axe",
-    "Clear the ambulance corridor",
+    "Clear the surgical corridor",
+    "Reset the ambulance-door breaker",
+    "Survive the emergency-wing ambush",
     "Open the ambulance entrance",
   ],
   street: [
@@ -341,7 +343,11 @@ export function LastBusOutGame() {
         } else if (id === "axe" && step === 2) {
           advanceStep(3);
           showToast("Fire axe secured · movement ahead");
-        } else if (id === "exit" && step >= 4) {
+        } else if (id === "breaker" && step === 4) {
+          advanceStep(5);
+          showToast("Ambulance doors powered · something heard the breaker");
+          playSound("generator");
+        } else if (id === "exit" && step >= 6) {
           loadChapter("street");
         }
       } else if (chapter === "street") {
@@ -441,7 +447,10 @@ export function LastBusOutGame() {
   const handleEncounterCleared = useCallback(() => {
     if (chapter === "hospital" && step === 3) {
       advanceStep(4);
-      showToast("Ambulance corridor clear");
+      showToast("Surgical corridor clear · reach the emergency wing");
+    } else if (chapter === "hospital" && step === 5) {
+      advanceStep(6);
+      showToast("Emergency wing clear · ambulance entrance unlocked");
     } else if (chapter === "checkpoint" && step === 2) {
       advanceStep(3);
       showToast("Floodlight yard clear · north gate controls available");

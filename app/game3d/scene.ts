@@ -1414,13 +1414,13 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   const interactions: InteractionPoint[] = [];
   baseScene(root, "hospital");
 
-  box(root, [17, 0.22, 100], [0, -0.11, -41], materials.tile);
-  box(root, [0.34, 4.8, 100], [-8.35, 2.4, -41], materials.wall);
-  box(root, [0.34, 4.8, 100], [8.35, 2.4, -41], materials.wall);
-  box(root, [17, 0.18, 100], [0, 4.72, -41], materials.concreteDark);
-  box(root, [17, 4.8, 0.35], [0, 2.4, -91], materials.wall);
+  box(root, [17, 0.22, 128], [0, -0.11, -55], materials.tile);
+  box(root, [0.34, 4.8, 128], [-8.35, 2.4, -55], materials.wall);
+  box(root, [0.34, 4.8, 128], [8.35, 2.4, -55], materials.wall);
+  box(root, [17, 0.18, 128], [0, 4.72, -55], materials.concreteDark);
+  box(root, [17, 4.8, 0.35], [0, 2.4, -119], materials.wall);
 
-  for (let z = 5; z >= -86; z -= 7.4) {
+  for (let z = 5; z >= -114; z -= 7.4) {
     addFluorescent(root, z % 14.8 === 5 ? -2.7 : 2.7, z, z < -62 ? 1.1 : 2.5);
   }
 
@@ -1429,6 +1429,8 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     ["PHARMACY", -31, "rgba(49,70,83,.96)"],
     ["SURGERY", -55, "rgba(76,45,42,.96)"],
     ["EMERGENCY", -76, "rgba(95,34,29,.96)"],
+    ["ISOLATION", -96, "rgba(80,33,30,.96)"],
+    ["AMBULANCE", -112, "rgba(34,70,55,.96)"],
   ] as const) {
     const sign = textPanel(label, "#e8eee5", color);
     sign.position.set(0, 3.82, z);
@@ -1455,7 +1457,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   );
 
   for (const side of [-1, 1]) {
-    for (let z = 2; z >= -84; z -= 8.5) {
+    for (let z = 2; z >= -112; z -= 8.5) {
       box(
         root,
         [0.12, 0.11, 7.1],
@@ -1466,7 +1468,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   }
 
   for (const side of [-1, 1] as const) {
-    for (let z = -5; z >= -78; z -= 11) {
+    for (let z = -5; z >= -111; z -= 11) {
       const frameX = side * 8.12;
       box(root, [0.22, 2.8, 2.5], [frameX, 1.4, z], materials.metal);
       const door = box(
@@ -1492,6 +1494,12 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   const bedC = hospitalBed(materials, -4.8, -67, Math.PI / 2 - 0.32);
   root.add(bedC);
   collisions.push({ x: -4.8, z: -67, radius: 1.25 });
+  const bedD = hospitalBed(materials, 5.15, -91, -Math.PI / 2 + 0.18);
+  root.add(bedD);
+  collisions.push({ x: 5.15, z: -91, radius: 1.25 });
+  const bedE = hospitalBed(materials, -5.2, -108, Math.PI / 2 + 0.24);
+  root.add(bedE);
+  collisions.push({ x: -5.2, z: -108, radius: 1.25 });
   root.add(hospitalCart(materials, 5.7, -17));
   collisions.push({ x: 5.7, z: -17, radius: 0.7 });
 
@@ -1499,6 +1507,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     patientMonitor(materials, -6.15, -21, -Math.PI / 2),
     patientMonitor(materials, 5.85, -39, Math.PI / 2),
     patientMonitor(materials, -5.9, -72, -Math.PI / 2),
+    patientMonitor(materials, 5.9, -101, Math.PI / 2),
   ];
   for (const monitor of monitors) {
     root.add(monitor);
@@ -1514,6 +1523,8 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     [5.1, -50.1, -0.3],
     [-5.6, -64.7, 0.4],
     [6.2, -77.2, -0.2],
+    [-5.5, -96.4, 0.35],
+    [5.6, -111.2, -0.15],
     [5.7, -7.8, 0.1],
   ] as const) {
     root.add(ivStand(materials, x, z, rotation));
@@ -1524,6 +1535,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     [6.55, -34.5, 0.3],
     [-6.5, -57.2, -0.3],
     [6.4, -83.2, 0.2],
+    [-6.35, -104.2, -0.22],
   ] as const) {
     root.add(oxygenTank(materials, x, z, rotation));
     collisions.push({ x, z, radius: 0.42 });
@@ -1532,6 +1544,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   const wheelchairs = [
     wheelchair(materials, 5.45, -27.4, -Math.PI / 2 + 0.18),
     wheelchair(materials, -5.2, -47.5, Math.PI / 2 - 0.36),
+    wheelchair(materials, 5.3, -109.5, -Math.PI / 2 + 0.22),
   ];
   for (const chair of wheelchairs) {
     root.add(chair);
@@ -1545,6 +1558,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   const cabinets = [
     medicalCabinet(materials, -7.72, -18, Math.PI / 2),
     medicalCabinet(materials, 7.72, -41, -Math.PI / 2),
+    medicalCabinet(materials, -7.72, -99, Math.PI / 2),
   ];
   for (const cabinet of cabinets) root.add(cabinet);
 
@@ -1553,6 +1567,8 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   root.add(liquidPuddle("#6a201b", -1.7, -35, 2.5, -0.42));
   root.add(liquidPuddle("#4b6256", 3.5, -61.5, 3.7, 0.12));
   root.add(liquidPuddle("#671b18", -2.7, -76, 2.1, 0.7));
+  root.add(liquidPuddle("#31544d", 2.2, -94, 3.6, -0.18));
+  root.add(liquidPuddle("#561410", -1.2, -110, 2.8, 0.32));
 
   const curtainMaterial = new THREE.MeshStandardMaterial({
     color: 0x789a8d,
@@ -1564,6 +1580,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   for (const [x, z, rotation] of [
     [-5.8, -37, 0.12],
     [5.8, -68, -0.16],
+    [-5.7, -103, 0.22],
   ] as const) {
     const rail = new THREE.Mesh(
       new THREE.TorusGeometry(1.15, 0.025, 8, 30, Math.PI * 1.35),
@@ -1589,7 +1606,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   }
 
   for (const side of [-1, 1]) {
-    for (let z = 1; z >= -86; z -= 18) {
+    for (let z = 1; z >= -114; z -= 18) {
       const pipeMaterial = side === -1 ? materials.metal : materials.rust;
       cylinder(
         root,
@@ -1611,10 +1628,10 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     }
   }
 
-  for (let i = 0; i < 34; i += 1) {
+  for (let i = 0; i < 44; i += 1) {
     const random = seededNoise(380 + i);
     const x = -6.8 + random() * 13.6;
-    const z = -6 - random() * 78;
+    const z = -6 - random() * 106;
     if (i % 3 === 0) {
       cylinder(
         root,
@@ -1635,12 +1652,12 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     }
   }
 
-  for (let i = 0; i < 44; i += 1) {
+  for (let i = 0; i < 58; i += 1) {
     const random = seededNoise(90 + i);
     const debris = box(
       root,
       [0.12 + random() * 0.42, 0.025 + random() * 0.05, 0.12 + random() * 0.42],
-      [-6.8 + random() * 13.6, 0.04, -3 - random() * 82],
+      [-6.8 + random() * 13.6, 0.04, -3 - random() * 110],
       i % 4 === 0 ? materials.rust : materials.concreteDark,
       [random() * 0.2, random() * Math.PI, random() * 0.2],
     );
@@ -1648,7 +1665,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   }
 
   const exitSign = textPanel("AMBULANCE EXIT", "#d9eadb", "rgba(28,74,54,.96)");
-  exitSign.position.set(0, 4.12, -90.5);
+  exitSign.position.set(0, 4.12, -118.5);
   exitSign.scale.set(1.15, 1.15, 1);
   root.add(exitSign);
   const exitDoorMaterial = new THREE.MeshStandardMaterial({
@@ -1660,14 +1677,14 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     roundedBox(
       root,
       [1.52, 3.52, 0.18],
-      [side * 0.8, 1.76, -90.74],
+      [side * 0.8, 1.76, -118.74],
       exitDoorMaterial,
       0.08,
     );
     roundedBox(
       root,
       [0.78, 1.35, 0.04],
-      [side * 0.8, 2.25, -90.62],
+      [side * 0.8, 2.25, -118.62],
       materials.glass,
       0.05,
     );
@@ -1675,19 +1692,28 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
       root,
       [0.035, 0.035],
       0.42,
-      [side * 0.28, 1.68, -90.48],
+      [side * 0.28, 1.68, -118.48],
       materials.metal,
       [Math.PI / 2, 0, 0],
       10,
     );
   }
-  box(root, [0.08, 3.6, 0.25], [0, 1.8, -90.6], materials.metal);
+  box(root, [0.08, 3.6, 0.25], [0, 1.8, -118.6], materials.metal);
+
+  const breaker = new THREE.Group();
+  roundedBox(breaker, [0.72, 0.92, 0.26], [0, 0.35, 0], materials.paintedMetal, 0.06);
+  roundedBox(breaker, [0.44, 0.17, 0.035], [0, 0.52, 0.15], materials.glass, 0.025);
+  for (const x of [-0.16, 0, 0.16]) {
+    cylinder(breaker, [0.035, 0.035], 0.11, [x, 0.25, 0.15], materials.red, [Math.PI / 2, 0, 0], 10);
+  }
+  box(breaker, [0.12, 0.34, 0.08], [0, 0.02, 0.17], materials.rust, [0, 0, -0.32]);
 
   interactions.push(
     interactionObject(root, "torch", "Take torch", [1.4, 0, -10], createEquipmentModel("torch", 1)),
     interactionObject(root, "radio", "Check emergency radio", [-4.6, 0, -26], createEquipmentModel("radio", 1)),
     interactionObject(root, "axe", "Take fire axe", [4.7, 0, -45], createEquipmentModel("axe", 1)),
-    interactionObject(root, "exit", "Open ambulance entrance", [0, 0, -87], new THREE.Group()),
+    interactionObject(root, "breaker", "Reset ambulance-door breaker", [6.6, 0, -92], breaker),
+    interactionObject(root, "exit", "Open ambulance entrance", [0, 0, -115], new THREE.Group()),
   );
 
   return {
@@ -1695,7 +1721,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     collisions,
     interactions,
     start: new THREE.Vector3(0, 0, 7),
-    bounds: { minX: -7.55, maxX: 7.55, minZ: -88, maxZ: 8 },
+    bounds: { minX: -7.55, maxX: 7.55, minZ: -116, maxZ: 8 },
   };
 }
 

@@ -77,9 +77,17 @@ type HealthBar = {
 
 type EnemyActor = {
   id: number;
+  style: "walker" | "runner" | "heavy";
   hp: number;
   maxHp: number;
   speed: number;
+  turnBias: number;
+  targetTurnBias: number;
+  turnClock: number;
+  pace: number;
+  targetPace: number;
+  paceClock: number;
+  gaitPhase: number;
   attackClock: number;
   attackAnimation: number;
   hitTimer: number;
@@ -125,7 +133,8 @@ function isInteractionAvailable(
     if (id === "torch") return step === 0;
     if (id === "radio") return step === 1;
     if (id === "axe") return step === 2;
-    if (id === "exit") return step >= 4;
+    if (id === "breaker") return step === 4;
+    if (id === "exit") return step >= 6;
   }
   if (chapter === "street") {
     if (id === "signal") return step === 0;
@@ -285,6 +294,13 @@ export const GameViewport3D = forwardRef<
           ? 0.018
           : 0.012,
     );
+    const baseBackgroundColor = (
+      scene.background as THREE.Color
+    ).clone();
+    const blackoutBackgroundColor = new THREE.Color(0x000000);
+    const sceneFog = scene.fog as THREE.FogExp2;
+    const baseFogColor = sceneFog.color.clone();
+    const blackoutFogColor = new THREE.Color(0x000000);
 
     const camera = new THREE.PerspectiveCamera(58, 1, 0.08, 210);
     const renderer = new THREE.WebGLRenderer({
@@ -303,6 +319,7 @@ export const GameViewport3D = forwardRef<
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure =
       props.chapter === "hospital" || props.chapter === "depot" ? 1.02 : 1.18;
+    const baseToneMappingExposure = renderer.toneMappingExposure;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.BasicShadowMap;
     renderer.shadowMap.autoUpdate = false;
@@ -318,6 +335,8 @@ export const GameViewport3D = forwardRef<
     scene.add(world.root);
     const flickerLights: THREE.Light[] = [];
     const localLights: Array<THREE.PointLight | THREE.SpotLight> = [];
+    const environmentLights: THREE.Light[] = [];
+    const fixtureMaterials = new Set<THREE.MeshStandardMaterial>();
     const shadowScale = new THREE.Vector3();
     world.root.updateMatrixWorld(true);
     world.root.traverse((object) => {
@@ -331,17 +350,41 @@ export const GameViewport3D = forwardRef<
           Math.max(shadowScale.x, shadowScale.y, shadowScale.z);
         if (shadowRadius < 0.3) object.castShadow = false;
       }
+      if (object instanceof THREE.Mesh) {
+        const objectMaterials = Array.isArray(object.material)
+          ? object.material
+          : [object.material];
+        for (const material of objectMaterials) {
+          if (
+            material instanceof THREE.MeshStandardMaterial &&
+            material.emissiveIntensity > 0.25
+          ) {
+            material.userData.baseEmissiveIntensity ??=
+              material.emissiveIntensity;
+            fixtureMaterials.add(material);
+          }
+        }
+      }
       if (object instanceof THREE.Light && object.userData.flicker) {
         flickerLights.push(object);
+      }
+      if (
+        object instanceof THREE.HemisphereLight ||
+        object instanceof THREE.DirectionalLight
+      ) {
+        object.userData.baseIntensity ??= object.intensity;
+        environmentLights.push(object);
       }
       if (
         object instanceof THREE.PointLight ||
         object instanceof THREE.SpotLight
       ) {
+        object.userData.baseIntensity ??= object.intensity;
         localLights.push(object);
         object.visible = false;
       }
     });
+    const flickerLightSet = new Set(flickerLights);
 
     const playerRoot = new THREE.Group();
     playerRoot.position.copy(world.start);
@@ -395,9 +438,24 @@ export const GameViewport3D = forwardRef<
     const movement = new THREE.Vector3();
     const forward = new THREE.Vector3();
     const right = new THREE.Vector3();
+    const enemySideways = new THREE.Vector3();
+    const enemyChaseDirection = new THREE.Vector3();
+    const enemyOffset = new THREE.Vector3();
+    const heroForwardVector = new THREE.Vector3();
+    const toEnemyVector = new THREE.Vector3();
+    const attackDirectionVector = new THREE.Vector3();
+    const bloodOrigin = new THREE.Vector3();
+    const healthBarOffset = new THREE.Vector3();
+    const companionFollowOffset = new THREE.Vector3();
+    const companionTarget = new THREE.Vector3();
+    const companionOffset = new THREE.Vector3();
     const cameraTarget = new THREE.Vector3();
+    const cameraTargetOffset = new THREE.Vector3(0, 1.28, 0);
+    const cameraLookAhead = new THREE.Vector3();
     const desiredCamera = new THREE.Vector3();
+    const cameraShakeOffset = new THREE.Vector3();
     const lastPlayerPosition = playerRoot.position.clone();
+    const livingEnemies: EnemyActor[] = [];
     let animationFrame = 0;
     let cameraYaw = 0;
     let cameraPitch = 0.2;
@@ -433,6 +491,9 @@ export const GameViewport3D = forwardRef<
     let heartbeatClock = 0;
     let horrorPulse = 0;
     let cameraShake = 0;
+    let lightFailure = 0;
+    let lightFailureCooldown = 0;
+    let previousNearestThreat = 80;
     let localLightClock = 0;
     let shadowUpdateClock = 0;
     let lastRenderTime = performance.now() - 30;
@@ -548,11 +609,19 @@ export const GameViewport3D = forwardRef<
       scene.add(healthBar.group);
       const actor: EnemyActor = {
         id: nextEnemyId++,
+        style,
         hp: scaledMaxHp,
         maxHp: scaledMaxHp,
         speed:
           (style === "runner" ? 2.75 : style === "heavy" ? 0.88 : 1.3) *
           (1 + survivalDifficulty * 0.28),
+        turnBias: (Math.random() - 0.5) * 0.18,
+        targetTurnBias: (Math.random() - 0.5) * 0.35,
+        turnClock: 0.45 + Math.random() * 1.2,
+        pace: 0.86 + Math.random() * 0.24,
+        targetPace: 0.82 + Math.random() * 0.34,
+        paceClock: 0.65 + Math.random() * 1.4,
+        gaitPhase: Math.random() * Math.PI * 2,
         attackClock: 0.5 + Math.random() * 0.7,
         attackAnimation: 0,
         hitTimer: 0,
@@ -564,6 +633,22 @@ export const GameViewport3D = forwardRef<
       };
       enemies.push(actor);
       const spawnDistance = root.position.distanceTo(playerRoot.position);
+      if (spawnDistance < 36 && lightFailureCooldown <= 0) {
+        lightFailure = 2.35 + Math.random() * 0.65;
+        lightFailureCooldown = 4.8;
+        horrorPulse = Math.max(horrorPulse, 1.8);
+        propsRef.current.onSound("horror-sting", {
+          intensity: THREE.MathUtils.clamp(1 - spawnDistance / 52, 0.42, 0.92),
+        });
+        propsRef.current.onSound("zombie-growl", {
+          intensity: THREE.MathUtils.clamp(1.08 - spawnDistance / 38, 0.32, 0.96),
+          pan: THREE.MathUtils.clamp(
+            (root.position.x - playerRoot.position.x) / 14,
+            -0.9,
+            0.9,
+          ),
+        });
+      }
       propsRef.current.onSound("zombie-alert", {
         intensity: THREE.MathUtils.clamp(1 - spawnDistance / 42, 0.14, 0.72),
         pan: THREE.MathUtils.clamp(
@@ -890,7 +975,14 @@ export const GameViewport3D = forwardRef<
       encounterWasActive = false;
       if (current.chapter === "hospital" && current.step === 3) {
         spawnEnemy("walker", 0.4, -59);
-        spawnEnemy("walker", -3.8, -69);
+        spawnEnemy("runner", -3.8, -69);
+        spawnEnemy("walker", 4.6, -78);
+        encounterWasActive = true;
+      } else if (current.chapter === "hospital" && current.step === 5) {
+        spawnEnemy("walker", -4.6, -101);
+        spawnEnemy("runner", 4.8, -106);
+        spawnEnemy("walker", 3.4, -114);
+        spawnEnemy("heavy", -2.8, -116);
         encounterWasActive = true;
       } else if (current.chapter === "street" && current.step === 1) {
         spawnEnemy("walker", -2.7, -55);
@@ -1003,7 +1095,10 @@ export const GameViewport3D = forwardRef<
         return;
       }
       const current = propsRef.current;
-      const frameInterval = current.mode === "playing" ? 1000 / 40 : 1000 / 10;
+      const frameInterval =
+        current.mode === "playing"
+          ? 1000 / (coarsePointer ? 36 : 48)
+          : 1000 / 10;
       const timeSinceRender = timestamp - lastRenderTime;
       if (timeSinceRender < frameInterval) return;
       lastRenderTime =
@@ -1031,7 +1126,10 @@ export const GameViewport3D = forwardRef<
 
         const moving = movement.lengthSq() > 0;
         const running = Boolean(keys.shift && stamina > 1);
-        let movementSpeed = running ? 5.8 : 3.05;
+        let movementSpeed = running ? 3.3 : 1.1;
+        if (attack > 0) {
+          movementSpeed *= current.inventory.axe ? 0.52 : 0.7;
+        }
         if (dodge > 0) movementSpeed *= 2.25;
         const travel = movementSpeed * delta;
         if (moving) {
@@ -1114,11 +1212,11 @@ export const GameViewport3D = forwardRef<
                   ? "attackRun"
                   : "attack"
                 : actualSpeed > 0.12
-                  ? running
+                  ? actualSpeed > 1.6
                     ? "run"
                     : "walk"
                   : "idle";
-          updateAnimatedCharacter(hero, delta, heroState);
+          updateAnimatedCharacter(hero, delta, heroState, actualSpeed);
           setCharacterHitFlash(hero, heroHitTimer > 0 ? heroHitTimer : 0);
           hero.root.rotation.x =
             gunRecoil > 0 ? -Math.sin(gunRecoil * 20) * 0.055 : 0;
@@ -1126,21 +1224,26 @@ export const GameViewport3D = forwardRef<
 
         if (attack < 0.65 && attack > 0.18 && !attackHit) {
           attackHit = true;
-          const heroForward = new THREE.Vector3(0, 0, -1).applyQuaternion(
-            playerRoot.quaternion,
-          );
+          heroForwardVector
+            .set(0, 0, -1)
+            .applyQuaternion(playerRoot.quaternion);
           for (const enemy of enemies) {
             if (enemy.dying) continue;
-            const toEnemy = enemy.root.position
-              .clone()
+            toEnemyVector
+              .copy(enemy.root.position)
               .sub(playerRoot.position);
-            const distance = toEnemy.length();
-            const direction = toEnemy.clone().normalize();
-            if (distance < 2.85 && heroForward.dot(direction) > -0.05) {
+            const distance = toEnemyVector.length();
+            if (distance > 0.001) {
+              toEnemyVector.multiplyScalar(1 / distance);
+            }
+            if (
+              distance < 2.85 &&
+              heroForwardVector.dot(toEnemyVector) > -0.05
+            ) {
               damageEnemy(
                 enemy,
                 current.inventory.axe ? 58 : 25,
-                direction,
+                toEnemyVector,
                 current.inventory.axe ? 24 : 13,
                 0.38,
               );
@@ -1148,7 +1251,12 @@ export const GameViewport3D = forwardRef<
           }
         }
 
-        for (const enemy of [...enemies]) {
+        for (
+          let enemyIndex = enemies.length - 1;
+          enemyIndex >= 0;
+          enemyIndex -= 1
+        ) {
+          const enemy = enemies[enemyIndex];
           if (enemy.dying) {
             enemy.deathTimer -= delta;
             if (enemy.character) {
@@ -1163,23 +1271,95 @@ export const GameViewport3D = forwardRef<
             0,
             enemy.attackAnimation - delta,
           );
-          const offset = playerRoot.position.clone().sub(enemy.root.position);
-          const distance = offset.length();
-          offset.y = 0;
-          if (offset.lengthSq() > 0) offset.normalize();
+          enemyOffset
+            .copy(playerRoot.position)
+            .sub(enemy.root.position);
+          const distance = enemyOffset.length();
+          enemyOffset.y = 0;
+          if (enemyOffset.lengthSq() > 0) enemyOffset.normalize();
           const canChase = distance < 28;
+          enemy.turnClock -= delta;
+          if (enemy.turnClock <= 0) {
+            const turnRange =
+              enemy.style === "runner"
+                ? 0.2
+                : enemy.style === "heavy"
+                  ? 0.26
+                  : 0.4;
+            enemy.targetTurnBias = (Math.random() - 0.5) * turnRange;
+            enemy.turnClock =
+              enemy.style === "runner"
+                ? 0.35 + Math.random() * 0.7
+                : 0.65 + Math.random() * 1.45;
+          }
+          enemy.paceClock -= delta;
+          if (enemy.paceClock <= 0) {
+            enemy.targetPace =
+              enemy.style === "runner"
+                ? 0.9 + Math.random() * 0.25
+                : enemy.style === "heavy"
+                  ? 0.68 + Math.random() * 0.24
+                  : 0.68 + Math.random() * 0.42;
+            enemy.paceClock = 0.55 + Math.random() * 1.6;
+          }
+          enemy.turnBias = THREE.MathUtils.lerp(
+            enemy.turnBias,
+            enemy.targetTurnBias,
+            1 - Math.exp(-delta * 1.8),
+          );
+          enemy.pace = THREE.MathUtils.lerp(
+            enemy.pace,
+            enemy.targetPace,
+            1 - Math.exp(-delta * 2.2),
+          );
           if (
             canChase &&
             distance > 1.18 &&
             enemy.hitTimer <= 0.08 &&
             enemy.attackAnimation <= 0.08
           ) {
-            enemy.root.position.addScaledVector(offset, enemy.speed * delta);
-            const targetRotation = Math.atan2(-offset.x, -offset.z);
+            enemySideways.set(-enemyOffset.z, 0, enemyOffset.x);
+            const weaveStrength =
+              distance < 3
+                ? enemy.turnBias * 0.2
+                : enemy.turnBias +
+                  Math.sin(time * 0.72 + enemy.gaitPhase) *
+                    (enemy.style === "walker" ? 0.1 : 0.045);
+            enemyChaseDirection
+              .copy(enemyOffset)
+              .addScaledVector(enemySideways, weaveStrength)
+              .normalize();
+            const gaitPulse =
+              0.82 +
+              Math.sin(
+                time * (enemy.style === "runner" ? 5.2 : 2.15) +
+                  enemy.gaitPhase,
+              ) *
+                (enemy.style === "walker" ? 0.18 : 0.1);
+            const hesitation =
+              enemy.style === "walker" &&
+              Math.sin(time * 0.66 + enemy.gaitPhase * 1.7) > 0.92
+                ? 0.24
+                : 1;
+            enemy.root.position.addScaledVector(
+              enemyChaseDirection,
+              enemy.speed *
+                enemy.pace *
+                Math.max(0.28, gaitPulse) *
+                hesitation *
+                delta,
+            );
+            const targetRotation = Math.atan2(
+              -enemyChaseDirection.x,
+              -enemyChaseDirection.z,
+            );
             enemy.root.rotation.y = dampAngle(
               enemy.root.rotation.y,
               targetRotation,
-              Math.min(1, delta * 7),
+              Math.min(
+                1,
+                delta * (enemy.style === "runner" ? 8.5 : 4.8),
+              ),
             );
           }
 
@@ -1194,15 +1374,15 @@ export const GameViewport3D = forwardRef<
             enemy.attackAnimation = 0.74;
             heroHitTimer = 0.36;
             cameraShake = enemy.character?.style === "heavy" ? 0.58 : 0.34;
-            const attackDirection = playerRoot.position
-              .clone()
+            attackDirectionVector
+              .copy(playerRoot.position)
               .sub(enemy.root.position)
               .normalize();
             spawnBlood(
-              playerRoot.position
-                .clone()
-                .add(new THREE.Vector3(0, 1.14, 0)),
-              attackDirection,
+              bloodOrigin.copy(playerRoot.position).setY(
+                playerRoot.position.y + 1.14,
+              ),
+              attackDirectionVector,
               enemy.character?.style === "runner"
                 ? 15
                 : enemy.character?.style === "heavy"
@@ -1222,6 +1402,16 @@ export const GameViewport3D = forwardRef<
                 0.9,
               ),
             });
+            if (lightFailure > 0) {
+              current.onSound("zombie-growl", {
+                intensity: enemy.character?.style === "heavy" ? 1.2 : 1.02,
+                pan: THREE.MathUtils.clamp(
+                  (enemy.root.position.x - playerRoot.position.x) / 7,
+                  -0.9,
+                  0.9,
+                ),
+              });
+            }
             current.onSound("player-hit", {
               intensity: enemy.character?.style === "runner" ? 1.08 : 0.88,
             });
@@ -1261,7 +1451,7 @@ export const GameViewport3D = forwardRef<
           enemy.healthBar.group.position
             .copy(enemy.root.position)
             .add(
-              new THREE.Vector3(
+              healthBarOffset.set(
                 0,
                 (enemy.character?.height ?? 1.9) + 0.24,
                 0,
@@ -1272,7 +1462,10 @@ export const GameViewport3D = forwardRef<
             distance < 25 || enemy.hp < enemy.maxHp;
         }
 
-        const livingEnemies = enemies.filter((enemy) => !enemy.dying);
+        livingEnemies.length = 0;
+        for (const enemy of enemies) {
+          if (!enemy.dying) livingEnemies.push(enemy);
+        }
         const scareKey =
           current.chapter === "hospital" &&
           current.step >= 3 &&
@@ -1326,6 +1519,21 @@ export const GameViewport3D = forwardRef<
             enemy.root.position.distanceTo(playerRoot.position),
           );
         }
+        lightFailure = Math.max(0, lightFailure - delta);
+        lightFailureCooldown = Math.max(0, lightFailureCooldown - delta);
+        if (
+          nearestThreat < 14 &&
+          previousNearestThreat >= 14 &&
+          lightFailureCooldown <= 0
+        ) {
+          lightFailure = 2.65;
+          lightFailureCooldown = 5.4;
+          horrorPulse = Math.max(horrorPulse, 2.15);
+          cameraShake = Math.max(cameraShake, 0.11);
+          current.onSound("horror-sting", { intensity: 0.72 });
+          current.onSound("zombie-growl", { intensity: 0.9 });
+        }
+        previousNearestThreat = nearestThreat;
         const chapterDread =
           current.chapter === "hospital"
             ? 16
@@ -1367,8 +1575,18 @@ export const GameViewport3D = forwardRef<
           });
           heartbeatClock = THREE.MathUtils.lerp(1.05, 0.48, fear / 100);
         }
-        for (let index = 0; index < flickerLights.length; index += 1) {
-          const light = flickerLights[index];
+        const hardBlackout =
+          lightFailure > 0.48 && lightFailure < 1.88;
+        const globalPowerFactor =
+          lightFailure <= 0
+            ? 1
+            : hardBlackout
+              ? 0
+              : Math.sin(time * 34) + Math.sin(time * 11.3) > 0.1
+                ? 0.02
+                : 0.62;
+        for (let index = 0; index < localLights.length; index += 1) {
+          const light = localLights[index];
           const baseIntensity = Number(light.userData.baseIntensity ?? 1);
           const failure =
             horrorPulse > 0 &&
@@ -1376,8 +1594,63 @@ export const GameViewport3D = forwardRef<
           const unstable =
             (current.chapter === "hospital" || current.chapter === "depot") &&
             Math.sin(time * 1.7 + index * 4.9) > 0.985;
-          light.intensity = failure ? baseIntensity * 0.04 : unstable ? baseIntensity * 0.38 : baseIntensity;
+          const threatFailure =
+            lightFailure > 0 &&
+            (hardBlackout ||
+              Math.sin(time * 31 + index * 1.73) > -0.08);
+          const fixtureFactor = threatFailure
+            ? hardBlackout
+              ? 0
+              : 0.025
+            : globalPowerFactor;
+          const normalFactor = flickerLightSet.has(light)
+            ? failure
+              ? 0.04
+              : unstable
+                ? 0.38
+                : 1
+            : 1;
+          light.intensity =
+            baseIntensity * Math.min(fixtureFactor, normalFactor);
         }
+        for (const material of fixtureMaterials) {
+          const baseIntensity = Number(
+            material.userData.baseEmissiveIntensity ?? 1,
+          );
+          material.emissiveIntensity = baseIntensity * globalPowerFactor;
+        }
+        const indoorPowerFailure =
+          current.chapter === "hospital" ||
+          current.chapter === "station" ||
+          current.chapter === "checkpoint" ||
+          current.chapter === "depot";
+        for (const light of environmentLights) {
+          const baseIntensity = Number(light.userData.baseIntensity ?? 1);
+          light.intensity =
+            baseIntensity *
+            (indoorPowerFailure
+              ? THREE.MathUtils.lerp(
+                  hardBlackout ? 0 : 0.035,
+                  1,
+                  globalPowerFactor,
+                )
+              : 1);
+        }
+        const worldPowerFactor =
+          indoorPowerFailure && lightFailure > 0
+            ? hardBlackout
+              ? 0
+              : globalPowerFactor
+            : 1;
+        (scene.background as THREE.Color)
+          .copy(baseBackgroundColor)
+          .lerp(blackoutBackgroundColor, 1 - worldPowerFactor);
+        sceneFog.color
+          .copy(baseFogColor)
+          .lerp(blackoutFogColor, 1 - worldPowerFactor);
+        renderer.toneMappingExposure =
+          baseToneMappingExposure *
+          THREE.MathUtils.lerp(0.34, 1, worldPowerFactor);
 
         zombieVoiceClock -= delta;
         if (livingEnemies.length > 0 && zombieVoiceClock <= 0) {
@@ -1385,7 +1658,8 @@ export const GameViewport3D = forwardRef<
           let nearestDistance = nearest.root.position.distanceTo(
             playerRoot.position,
           );
-          for (const enemy of livingEnemies.slice(1)) {
+          for (let index = 1; index < livingEnemies.length; index += 1) {
+            const enemy = livingEnemies[index];
             const distance = enemy.root.position.distanceTo(
               playerRoot.position,
             );
@@ -1394,19 +1668,27 @@ export const GameViewport3D = forwardRef<
               nearestDistance = distance;
             }
           }
-          current.onSound("zombie-alert", {
-            intensity: THREE.MathUtils.clamp(
-              1.05 - nearestDistance / 30,
-              0.16,
-              0.9,
-            ),
-            pan: THREE.MathUtils.clamp(
-              (nearest.root.position.x - playerRoot.position.x) / 16,
-              -0.9,
-              0.9,
-            ),
-          });
-          zombieVoiceClock = 3.2 + Math.random() * 4.4;
+          current.onSound(
+            lightFailure > 0 || nearestDistance < 11
+              ? "zombie-growl"
+              : "zombie-alert",
+            {
+              intensity: THREE.MathUtils.clamp(
+                1.05 - nearestDistance / 30,
+                0.16,
+                0.9,
+              ),
+              pan: THREE.MathUtils.clamp(
+                (nearest.root.position.x - playerRoot.position.x) / 16,
+                -0.9,
+                0.9,
+              ),
+            },
+          );
+          zombieVoiceClock =
+            lightFailure > 0 || nearestDistance < 11
+              ? 1.35 + Math.random() * 1.9
+              : 3.2 + Math.random() * 4.4;
         }
         if (encounterWasActive && livingEnemies.length === 0) {
           encounterWasActive = false;
@@ -1527,26 +1809,31 @@ export const GameViewport3D = forwardRef<
         }
 
         if (maya) {
-          const followOffset = new THREE.Vector3(
-            1.05,
-            0,
-            1.55,
-          ).applyAxisAngle(UP, playerRoot.rotation.y);
-          const target = playerRoot.position.clone().add(followOffset);
-          const offset = target.sub(maya.root.position);
-          const distance = offset.length();
+          companionFollowOffset
+            .set(1.05, 0, 1.55)
+            .applyAxisAngle(UP, playerRoot.rotation.y);
+          companionTarget
+            .copy(playerRoot.position)
+            .add(companionFollowOffset);
+          companionOffset
+            .copy(companionTarget)
+            .sub(maya.root.position);
+          const distance = companionOffset.length();
           let companionSpeed = 0;
           if (distance > 0.42) {
-            offset.normalize();
+            companionOffset.normalize();
             companionSpeed = Math.min(
-              running ? 6.2 : 3.35,
+              running ? 4.2 : 2.2,
               distance * 3.2,
             );
             maya.root.position.addScaledVector(
-              offset,
+              companionOffset,
               companionSpeed * delta,
             );
-            const targetRotation = Math.atan2(-offset.x, -offset.z);
+            const targetRotation = Math.atan2(
+              -companionOffset.x,
+              -companionOffset.z,
+            );
             maya.root.rotation.y = dampAngle(
               maya.root.rotation.y,
               targetRotation,
@@ -1558,11 +1845,12 @@ export const GameViewport3D = forwardRef<
             updateAnimatedCharacter(
               maya.character,
               delta,
-              companionSpeed > 4
+              companionSpeed > 1.45
                 ? "run"
                 : companionSpeed > 0.1
                   ? "walk"
                   : "idle",
+              companionSpeed,
             );
           }
         }
@@ -1593,7 +1881,7 @@ export const GameViewport3D = forwardRef<
       updateShots(delta);
       cameraTarget
         .copy(playerRoot.position)
-        .add(new THREE.Vector3(0, 1.28, 0));
+        .add(cameraTargetOffset);
       const horizontalDistance =
         cameraDistance * Math.cos(cameraPitch);
       desiredCamera.set(
@@ -1607,7 +1895,7 @@ export const GameViewport3D = forwardRef<
       );
       if (cameraShake > 0) {
         desiredCamera.add(
-          new THREE.Vector3(
+          cameraShakeOffset.set(
             (Math.random() - 0.5) * cameraShake,
             (Math.random() - 0.5) * cameraShake * 0.62,
             (Math.random() - 0.5) * cameraShake,
@@ -1627,8 +1915,8 @@ export const GameViewport3D = forwardRef<
         desiredCamera,
         1 - Math.exp(-delta * 9),
       );
-      const lookAhead = forward.clone().multiplyScalar(2.5);
-      camera.lookAt(cameraTarget.add(lookAhead));
+      cameraLookAhead.copy(forward).multiplyScalar(2.5);
+      camera.lookAt(cameraTarget.add(cameraLookAhead));
       shadowUpdateClock += delta;
       if (
         renderer.shadowMap.enabled &&

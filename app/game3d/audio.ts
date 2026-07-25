@@ -3,6 +3,7 @@ export type GameSoundEvent =
   | "attack-swing"
   | "dodge"
   | "zombie-alert"
+  | "zombie-growl"
   | "zombie-attack"
   | "zombie-hit"
   | "zombie-death"
@@ -248,6 +249,8 @@ export class SurvivalAudio {
           : 315
         : event === "zombie-alert"
           ? 900
+          : event === "zombie-growl"
+            ? 420
           : event === "heartbeat"
             ? 380
             : event === "radio-static"
@@ -305,6 +308,14 @@ export class SurvivalAudio {
       this.tone(104, 0.68, 0.052 * intensity, "sawtooth", pan, 48);
       this.tone(71, 0.74, 0.036 * intensity, "triangle", pan, 43, 0.035);
       this.noiseBurst(0.5, 0.022 * intensity, "lowpass", 560, pan, 0.04, 170);
+      return;
+    }
+
+    if (event === "zombie-growl") {
+      this.tone(74, 0.48, 0.064 * intensity, "sawtooth", pan, 39);
+      this.tone(51, 0.62, 0.046 * intensity, "triangle", pan, 31, 0.045);
+      this.noiseBurst(0.36, 0.055 * intensity, "bandpass", 430, pan, 0.025, 185);
+      this.noiseBurst(0.12, 0.021 * intensity, "highpass", 2600, pan, 0.16);
       return;
     }
 
