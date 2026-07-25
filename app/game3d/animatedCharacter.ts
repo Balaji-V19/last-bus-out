@@ -1515,7 +1515,6 @@ type LicensedModelSource = {
 };
 const licensedModelCache = new Map<string, Promise<LicensedModelSource>>();
 const compatibleClipCache = new Map<string, THREE.AnimationClip>();
-let licensedAnimationCache: Promise<THREE.AnimationClip[]> | null = null;
 
 function localAssetUrl(path: string) {
   return new URL(path, document.baseURI).toString();
@@ -1534,18 +1533,6 @@ function loadLicensedModel(name: "hero" | "maya" | "infected") {
     }));
   licensedModelCache.set(name, loading);
   return loading;
-}
-
-function loadLicensedAnimations() {
-  licensedAnimationCache ??= Promise.all([
-    licensedCharacterLoader.loadAsync(
-      localAssetUrl("models/characters/human-animations.glb"),
-    ),
-    licensedCharacterLoader.loadAsync(
-      localAssetUrl("models/characters/human-addon-animations.glb"),
-    ),
-  ]).then(([base, addon]) => [...base.animations, ...addon.animations]);
-  return licensedAnimationCache;
 }
 
 function compatibleClip(
@@ -1693,9 +1680,10 @@ async function createLicensedCharacter(
   const hasNativeClips = sourceModel.animations.some(
     (clip) => clip.name === "Native_Idle",
   );
-  const clips = hasNativeClips
-    ? sourceModel.animations
-    : await loadLicensedAnimations();
+  if (!hasNativeClips) {
+    throw new Error(`${modelName}.glb does not contain native gameplay clips.`);
+  }
+  const clips = sourceModel.animations;
   const assetScene = cloneSkeleton(sourceModel.scene) as THREE.Group;
   assetScene.name = `Realistic_${style}`;
 

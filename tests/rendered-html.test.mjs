@@ -22,7 +22,7 @@ async function render() {
   );
 }
 
-test("server-renders the Last Bus Out 3D survival experience", async () => {
+test("server-renders the lightweight Last Bus Out launch menu", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -32,6 +32,7 @@ test("server-renders the Last Bus Out 3D survival experience", async () => {
   assert.match(html, /three-dimensional survival game/i);
   assert.match(html, /Begin the escape/);
   assert.match(html, /WASD/);
-  assert.match(html, /game-viewport-3d/);
+  assert.match(html, /menu-screen/);
+  assert.doesNotMatch(html, /game-viewport-3d/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Starter Project/);
 });

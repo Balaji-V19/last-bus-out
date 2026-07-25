@@ -39,6 +39,7 @@ type GameViewportProps = {
   ammo: number;
   inventory: Inventory;
   resetToken: number;
+  onReady: () => void;
   onInteraction: (id: string) => void;
   onPromptChange: (prompt: { id: string; label: string } | null) => void;
   onStaminaChange: (value: number) => void;
@@ -412,6 +413,9 @@ export const GameViewport3D = forwardRef<
       hero = character;
       setAnimatedEquipment(character, propsRef.current.inventory);
       playerRoot.add(character.root);
+      requestAnimationFrame(() => {
+        if (!disposed) propsRef.current.onReady();
+      });
     });
 
     let maya: CompanionActor | null = null;
@@ -493,6 +497,9 @@ export const GameViewport3D = forwardRef<
     let cameraShake = 0;
     let lightFailure = 0;
     let lightFailureCooldown = 0;
+    let hospitalBlackoutClock = 0;
+    let threatBlackoutClock = 0;
+    let flashlightWasEquipped = false;
     let previousNearestThreat = 80;
     let localLightClock = 0;
     let shadowUpdateClock = 0;
@@ -1521,6 +1528,70 @@ export const GameViewport3D = forwardRef<
         }
         lightFailure = Math.max(0, lightFailure - delta);
         lightFailureCooldown = Math.max(0, lightFailureCooldown - delta);
+        const flashlightEquipped = Boolean(current.inventory.torch);
+        const hospitalPowerUnstable =
+          current.chapter === "hospital" && flashlightEquipped;
+        if (
+          current.chapter === "hospital" &&
+          flashlightEquipped &&
+          !flashlightWasEquipped
+        ) {
+          hospitalBlackoutClock = 0.55;
+          lightFailureCooldown = Math.min(lightFailureCooldown, 0.55);
+        }
+        flashlightWasEquipped = flashlightEquipped;
+
+        if (hospitalPowerUnstable) {
+          hospitalBlackoutClock -= delta;
+          if (hospitalBlackoutClock <= 0 && lightFailureCooldown <= 0) {
+            const threatClose = nearestThreat < 18;
+            lightFailure = 2.55 + Math.random() * 0.75;
+            lightFailureCooldown = 2.35;
+            hospitalBlackoutClock = threatClose
+              ? 3.8 + Math.random() * 2.5
+              : 5.4 + Math.random() * 3.8;
+            if (threatClose) {
+              threatBlackoutClock = Math.max(
+                threatBlackoutClock,
+                3.4 + Math.random() * 2.1,
+              );
+            }
+            horrorPulse = Math.max(horrorPulse, threatClose ? 2.35 : 1.2);
+            current.onSound(
+              threatClose ? "horror-sting" : "metal-slam",
+              { intensity: threatClose ? 0.86 : 0.48 },
+            );
+            if (threatClose) {
+              current.onSound("zombie-growl", { intensity: 0.92 });
+            }
+          }
+        }
+
+        if (nearestThreat < 16) {
+          threatBlackoutClock -= delta;
+          if (threatBlackoutClock <= 0 && lightFailureCooldown <= 0) {
+            lightFailure = 2.7 + Math.random() * 0.65;
+            lightFailureCooldown = 2.5;
+            threatBlackoutClock =
+              current.chapter === "hospital"
+                ? 3.6 + Math.random() * 2.6
+                : 6.5 + Math.random() * 3.8;
+            if (current.chapter === "hospital") {
+              hospitalBlackoutClock = Math.max(
+                hospitalBlackoutClock,
+                4.2 + Math.random() * 2.6,
+              );
+            }
+            horrorPulse = Math.max(horrorPulse, 2.25);
+            cameraShake = Math.max(cameraShake, 0.105);
+            current.onSound("horror-sting", { intensity: 0.76 });
+            current.onSound("zombie-growl", {
+              intensity: nearestThreat < 8 ? 1.08 : 0.88,
+            });
+          }
+        } else {
+          threatBlackoutClock = 0;
+        }
         if (
           nearestThreat < 14 &&
           previousNearestThreat >= 14 &&

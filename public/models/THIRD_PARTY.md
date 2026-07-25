@@ -15,9 +15,9 @@ Meshes asset bundle.
   original rescue/paramedic/infected materials, clothing regions, hair,
   survival gear, wounds, scale changes, and game-ready GLB export.
 
-The skeleton, `public/models/characters/human-animations.glb`, and
-`human-addon-animations.glb` are from Mesh2Motion. Mesh2Motion explicitly
-publishes its 3D models, rigs, and animations under CC0.
+The skeleton and source motion references used to author the native animation
+clips embedded directly in each playable GLB are from Mesh2Motion. Mesh2Motion
+explicitly publishes its 3D models, rigs, and animations under CC0.
 
 - Creator: Mesh2Motion contributors
 - Source: https://github.com/Mesh2Motion/mesh2motion-app

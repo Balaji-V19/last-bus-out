@@ -1,10 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  GameViewport3D,
-  type GameViewportHandle,
-} from "./GameViewport3D";
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import type { GameViewportHandle } from "./GameViewport3D";
 import {
   SurvivalAudio,
   type GameSoundEvent,
@@ -13,6 +17,13 @@ import {
 import type { EquipmentKind, GameChapter } from "./game3d/scene";
 
 type Mode = "menu" | "playing" | "paused" | "ending";
+
+const loadGameViewport = () => import("./GameViewport3D");
+const GameViewport3D = lazy(async () => {
+  const loadedViewport = await loadGameViewport();
+  return { default: loadedViewport.GameViewport3D };
+});
+
 type SaveData = {
   chapter: GameChapter;
   step: number;
@@ -168,6 +179,7 @@ export function LastBusOutGame() {
   const [hasSave, setHasSave] = useState(false);
   const [resetToken, setResetToken] = useState(0);
   const [damagePulse, setDamagePulse] = useState(0);
+  const [worldReady, setWorldReady] = useState(false);
 
   const playSound = useCallback(
     (event: GameSoundEvent, options?: GameSoundOptions) => {
@@ -226,6 +238,7 @@ export function LastBusOutGame() {
 
   const loadChapter = useCallback(
     (nextChapter: GameChapter, nextStep = 0) => {
+      setWorldReady(false);
       setChapter(nextChapter);
       setStep(nextStep);
       setPrompt(null);
@@ -259,6 +272,7 @@ export function LastBusOutGame() {
   );
 
   const resetRun = useCallback(() => {
+    setWorldReady(false);
     healthRef.current = 100;
     killsRef.current = 0;
     setHealth(100);
@@ -290,6 +304,7 @@ export function LastBusOutGame() {
   }, [playSound, setMode]);
 
   const continueRun = useCallback(() => {
+    setWorldReady(false);
     const saved = getSave();
     if (!saved) {
       resetRun();
@@ -545,6 +560,26 @@ export function LastBusOutGame() {
   }, []);
 
   useEffect(() => {
+    if (mode !== "menu") return;
+    const preload = () => {
+      void loadGameViewport();
+    };
+    const idleWindow = window as unknown as {
+      requestIdleCallback?: (
+        callback: () => void,
+        options?: { timeout: number },
+      ) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (idleWindow.requestIdleCallback) {
+      const idleId = idleWindow.requestIdleCallback(preload, { timeout: 2600 });
+      return () => idleWindow.cancelIdleCallback?.(idleId);
+    }
+    const timer = globalThis.setTimeout(preload, 1400);
+    return () => globalThis.clearTimeout(timer);
+  }, [mode]);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!soundOn || mode === "menu" || mode === "ending") {
       audio?.setEnabled(soundOn);
@@ -610,33 +645,38 @@ export function LastBusOutGame() {
 
   return (
     <main className="game-shell" aria-label="Last Bus Out three-dimensional survival game">
-      <GameViewport3D
-        ref={viewportRef}
-        chapter={chapter}
-        mode={mode}
-        step={step}
-        rescued={rescued}
-        health={health}
-        ammo={ammo}
-        inventory={inventory}
-        resetToken={resetToken}
-        onInteraction={handleInteraction}
-        onPromptChange={setPrompt}
-        onStaminaChange={setStamina}
-        onDamage={handleDamage}
-        onKill={handleKill}
-        onAmmoUsed={() => setAmmo((value) => Math.max(0, value - 1))}
-        onCombatProgress={(combo, score) => {
-          setCombatCombo(combo);
-          setCombatScore(score);
-        }}
-        onEncounterCleared={handleEncounterCleared}
-        onFuelProgress={handleFuelProgress}
-        onEscapeProgress={handleEscapeProgress}
-        onSurvivalProgress={handleSurvivalProgress}
-        onFearChange={setDread}
-        onSound={playSound}
-      />
+      {mode !== "menu" && (
+        <Suspense fallback={null}>
+          <GameViewport3D
+            ref={viewportRef}
+            chapter={chapter}
+            mode={mode}
+            step={step}
+            rescued={rescued}
+            health={health}
+            ammo={ammo}
+            inventory={inventory}
+            resetToken={resetToken}
+            onReady={() => setWorldReady(true)}
+            onInteraction={handleInteraction}
+            onPromptChange={setPrompt}
+            onStaminaChange={setStamina}
+            onDamage={handleDamage}
+            onKill={handleKill}
+            onAmmoUsed={() => setAmmo((value) => Math.max(0, value - 1))}
+            onCombatProgress={(combo, score) => {
+              setCombatCombo(combo);
+              setCombatScore(score);
+            }}
+            onEncounterCleared={handleEncounterCleared}
+            onFuelProgress={handleFuelProgress}
+            onEscapeProgress={handleEscapeProgress}
+            onSurvivalProgress={handleSurvivalProgress}
+            onFearChange={setDread}
+            onSound={playSound}
+          />
+        </Suspense>
+      )}
       <div className="noise" />
       <div className="vignette" />
       <div className="letterbox" />
@@ -859,8 +899,26 @@ export function LastBusOutGame() {
               survival, followed by an endless night watch.
             </p>
             <div className="menu-actions">
-              <button className="primary-button" onClick={resetRun}>Begin the escape</button>
-              {hasSave && <button className="secondary-button" onClick={continueRun}>Continue</button>}
+              <button
+                className="primary-button"
+                onClick={resetRun}
+                onFocus={() => void loadGameViewport()}
+                onPointerEnter={() => void loadGameViewport()}
+                onTouchStart={() => void loadGameViewport()}
+              >
+                Begin the escape
+              </button>
+              {hasSave && (
+                <button
+                  className="secondary-button"
+                  onClick={continueRun}
+                  onFocus={() => void loadGameViewport()}
+                  onPointerEnter={() => void loadGameViewport()}
+                  onTouchStart={() => void loadGameViewport()}
+                >
+                  Continue
+                </button>
+              )}
             </div>
             <div className="control-legend">
               <span>WASD · Walk</span>
@@ -872,6 +930,19 @@ export function LastBusOutGame() {
               <span>E · Interact</span>
               <span>Space · Dodge</span>
             </div>
+          </div>
+        </section>
+      )}
+
+      {mode !== "menu" && !worldReady && (
+        <section className="loading-screen" aria-live="polite" aria-busy="true">
+          <div className="loading-card">
+            <div className="eyebrow">Preparing the route</div>
+            <h2>Entering {chapterInfo.location}</h2>
+            <p>Loading the world and survivor rigs…</p>
+            <span className="loading-track" aria-hidden="true">
+              <span />
+            </span>
           </div>
         </section>
       )}
