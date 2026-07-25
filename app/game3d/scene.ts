@@ -1397,7 +1397,7 @@ function baseScene(root: THREE.Group, chapter: GameChapter) {
   );
   sun.position.set(-16, 22, 12);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 100;
   sun.shadow.camera.left = -35;
@@ -2359,7 +2359,7 @@ function buildEscape(materials: MaterialSet): BuiltWorld {
     const flood = new THREE.SpotLight(0xdce8dc, 9, 44, Math.PI / 5, 0.46, 1.3);
     flood.position.set(x, 5.7, -177.4);
     flood.target.position.set(x * 0.35, 0, -154);
-    flood.castShadow = true;
+    flood.castShadow = false;
     root.add(flood, flood.target);
   }
 
@@ -2459,7 +2459,7 @@ function makeWatchTower(materials: MaterialSet, x: number, z: number) {
   );
   flood.position.set(0, 5.75, 0);
   flood.target.position.set(-x * 0.4, 0, -z * 0.3);
-  flood.castShadow = true;
+  flood.castShadow = false;
   root.add(flood, flood.target);
   return root;
 }

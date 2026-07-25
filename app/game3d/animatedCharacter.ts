@@ -44,6 +44,8 @@ export type AnimatedCharacter = {
   stateTime: number;
   state: AnimationState;
   flashMaterials: THREE.MeshStandardMaterial[];
+  detailNodes: THREE.Object3D[];
+  detailsVisible: boolean;
 };
 
 type CharacterMaterials = {
@@ -126,7 +128,7 @@ function weatheredTexture(
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(1.8, 2.6);
-  texture.anisotropy = 4;
+  texture.anisotropy = 2;
   textureCache.set(key, texture);
   return texture;
 }
@@ -237,9 +239,121 @@ function addMesh(
   mesh.rotation.set(...rotation);
   mesh.scale.set(...scale);
   mesh.castShadow = true;
-  mesh.receiveShadow = true;
+  mesh.receiveShadow = false;
   parent.add(mesh);
   return mesh;
+}
+
+type AnatomicalRing = {
+  y: number;
+  width: number;
+  depth: number;
+  offsetZ?: number;
+};
+
+function anatomicalGeometry(
+  rings: AnatomicalRing[],
+  radialSegments = 14,
+) {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  const lastRing = Math.max(1, rings.length - 1);
+
+  for (let ringIndex = 0; ringIndex < rings.length; ringIndex += 1) {
+    const ring = rings[ringIndex];
+    for (let segment = 0; segment < radialSegments; segment += 1) {
+      const angle = (segment / radialSegments) * Math.PI * 2;
+      positions.push(
+        Math.cos(angle) * ring.width,
+        ring.y,
+        (ring.offsetZ ?? 0) + Math.sin(angle) * ring.depth,
+      );
+      uvs.push(segment / radialSegments, ringIndex / lastRing);
+    }
+  }
+
+  for (let ringIndex = 0; ringIndex < rings.length - 1; ringIndex += 1) {
+    for (let segment = 0; segment < radialSegments; segment += 1) {
+      const nextSegment = (segment + 1) % radialSegments;
+      const lower = ringIndex * radialSegments + segment;
+      const lowerNext = ringIndex * radialSegments + nextSegment;
+      const upper = (ringIndex + 1) * radialSegments + segment;
+      const upperNext = (ringIndex + 1) * radialSegments + nextSegment;
+      indices.push(lower, upper, lowerNext, lowerNext, upper, upperNext);
+    }
+  }
+
+  const bottomCenter = positions.length / 3;
+  positions.push(0, rings[0].y, rings[0].offsetZ ?? 0);
+  uvs.push(0.5, 0);
+  const topCenter = positions.length / 3;
+  const topRing = rings[rings.length - 1];
+  positions.push(0, topRing.y, topRing.offsetZ ?? 0);
+  uvs.push(0.5, 1);
+
+  for (let segment = 0; segment < radialSegments; segment += 1) {
+    const nextSegment = (segment + 1) % radialSegments;
+    indices.push(bottomCenter, nextSegment, segment);
+    const topOffset = (rings.length - 1) * radialSegments;
+    indices.push(topCenter, topOffset + segment, topOffset + nextSegment);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function anatomical(
+  parent: THREE.Object3D,
+  rings: AnatomicalRing[],
+  material: THREE.Material,
+  position: [number, number, number] = [0, 0, 0],
+  rotation: [number, number, number] = [0, 0, 0],
+  radialSegments = 14,
+) {
+  return addMesh(
+    parent,
+    anatomicalGeometry(rings, radialSegments),
+    material,
+    position,
+    rotation,
+  );
+}
+
+function ellipsoid(
+  parent: THREE.Object3D,
+  radii: [number, number, number],
+  material: THREE.Material,
+  position: [number, number, number],
+  rotation: [number, number, number] = [0, 0, 0],
+  widthSegments = 14,
+  heightSegments = 9,
+) {
+  return addMesh(
+    parent,
+    new THREE.SphereGeometry(1, widthSegments, heightSegments),
+    material,
+    position,
+    rotation,
+    radii,
+  );
+}
+
+function characterDetail<T extends THREE.Object3D>(object: T) {
+  object.userData.characterDetail = true;
+  if (object instanceof THREE.Mesh) {
+    object.castShadow = false;
+    object.receiveShadow = false;
+  }
+  return object;
 }
 
 function capsule(
@@ -253,7 +367,7 @@ function capsule(
 ) {
   return addMesh(
     parent,
-    new THREE.CapsuleGeometry(radius, length, 8, 18),
+    new THREE.CapsuleGeometry(radius, length, 6, 12),
     material,
     position,
     rotation,
@@ -272,7 +386,7 @@ function tapered(
 ) {
   return addMesh(
     parent,
-    new THREE.CylinderGeometry(topRadius, bottomRadius, length, 18, 4),
+    new THREE.CylinderGeometry(topRadius, bottomRadius, length, 14, 2),
     material,
     position,
     rotation,
@@ -293,7 +407,7 @@ function rounded(
       size[0],
       size[1],
       size[2],
-      4,
+      3,
       Math.min(radius, Math.min(...size) * 0.42),
     ),
     material,
@@ -433,115 +547,254 @@ function addHumanHead(
 ) {
   const isMaya = style === "maya";
   const infected = style === "walker" || style === "runner" || style === "heavy";
-  capsule(
+  const headWidth =
+    style === "heavy" ? 0.152 : isMaya ? 0.128 : infected ? 0.137 : 0.142;
+  const headDepth =
+    style === "heavy" ? 0.128 : isMaya ? 0.112 : infected ? 0.119 : 0.122;
+  const faceOffset = infected ? -0.008 : -0.014;
+
+  anatomical(
     headJoint,
-    infected ? 0.142 : 0.15,
-    infected ? 0.11 : 0.13,
+    [
+      { y: 0.005, width: headWidth * 0.78, depth: headDepth * 0.82, offsetZ: faceOffset },
+      { y: 0.055, width: headWidth * 0.98, depth: headDepth, offsetZ: faceOffset },
+      { y: 0.135, width: headWidth, depth: headDepth * 1.03 },
+      { y: 0.205, width: headWidth * 0.9, depth: headDepth * 0.96, offsetZ: 0.008 },
+      { y: 0.245, width: headWidth * 0.58, depth: headDepth * 0.64, offsetZ: 0.012 },
+    ],
     materials.skin,
-    [0, 0.16, 0],
-    [infected ? 0.9 : 0.94, 1.06, 0.91],
+    [0, 0, 0],
+    [infected ? 0.025 : 0, 0, 0],
+    18,
   );
-  capsule(
+
+  anatomical(
     jaw,
-    infected ? 0.09 : 0.105,
-    infected ? 0.055 : 0.07,
+    [
+      { y: -0.075, width: headWidth * 0.42, depth: headDepth * 0.56, offsetZ: -0.018 },
+      { y: -0.045, width: headWidth * 0.7, depth: headDepth * 0.76, offsetZ: -0.02 },
+      { y: 0.01, width: headWidth * 0.82, depth: headDepth * 0.88, offsetZ: -0.015 },
+      { y: 0.045, width: headWidth * 0.9, depth: headDepth * 0.92, offsetZ: -0.006 },
+    ],
     infected ? materials.skinDark : materials.skin,
-    [0, -0.015, -0.025],
-    [0.96, 0.88, 0.9],
+    [0, 0, 0],
+    [infected ? 0.04 : 0, 0, 0],
+    16,
   );
-  const nose = addMesh(
-    headJoint,
-    new THREE.ConeGeometry(0.035, 0.1, 9),
-    materials.skinDark,
-    [0, 0.17, -0.155],
-    [Math.PI / 2, 0, 0],
-    [0.76, 1, 0.72],
-  );
-  nose.castShadow = false;
+
   for (const side of [-1, 1]) {
-    capsule(
+    ellipsoid(
       headJoint,
-      0.021,
-      0.015,
-      materials.eye,
-      [side * 0.057, 0.207, -0.143],
-      [1, 0.62, 0.5],
-      [Math.PI / 2, 0, 0],
-    ).castShadow = false;
-    capsule(
-      headJoint,
-      infected ? 0.011 : 0.009,
-      0.004,
-      materials.eyeDark,
-      [side * 0.057, 0.207, -0.156],
-      [1, 0.72, 0.45],
-      [Math.PI / 2, 0, 0],
-    ).castShadow = false;
-    capsule(
-      headJoint,
-      0.032,
-      0.025,
-      materials.skin,
-      [side * 0.145, 0.16, 0],
-      [0.45, 0.82, 0.34],
+      [0.027, 0.043, 0.018],
+      materials.skinDark,
+      [side * headWidth * 0.98, 0.105, 0.004],
+      [0, 0, side * 0.08],
+      10,
+      7,
     );
   }
 
+  characterDetail(
+    capsule(
+      headJoint,
+      0.018,
+      0.065,
+      materials.skinDark,
+      [0, 0.103, -headDepth * 0.9],
+      [0.78, 1, 0.7],
+      [0, 0, 0],
+    ),
+  );
+  characterDetail(
+    ellipsoid(
+      headJoint,
+      [0.029, 0.023, 0.034],
+      materials.skin,
+      [0, 0.064, -headDepth * 1.08],
+      [0.08, 0, 0],
+      12,
+      8,
+    ),
+  );
+  for (const side of [-1, 1]) {
+    characterDetail(
+      ellipsoid(
+        headJoint,
+        [0.007, 0.004, 0.004],
+        materials.skinDark,
+        [side * 0.011, 0.056, -headDepth * 1.25],
+        [0, 0, 0],
+        8,
+        5,
+      ),
+    );
+  }
+
+  for (const side of [-1, 1]) {
+    characterDetail(
+      ellipsoid(
+        headJoint,
+        [0.026, 0.013, 0.008],
+        materials.eye,
+        [side * headWidth * 0.39, 0.12, -headDepth * 0.96],
+        [0.03, 0, side * 0.02],
+        12,
+        7,
+      ),
+    );
+    characterDetail(
+      ellipsoid(
+        headJoint,
+        [infected ? 0.009 : 0.007, infected ? 0.009 : 0.007, 0.005],
+        materials.eyeDark,
+        [side * headWidth * 0.39, 0.119, -headDepth * 1.025],
+        [0, 0, 0],
+        9,
+        6,
+      ),
+    );
+    characterDetail(
+      capsule(
+        headJoint,
+        0.007,
+        0.044,
+        infected ? materials.wound : materials.hair,
+        [side * headWidth * 0.39, 0.155, -headDepth * 0.93],
+        [1, 0.75, 0.55],
+        [0, 0, Math.PI / 2 + side * 0.1],
+      ),
+    );
+  }
+
+  const upperLip = characterDetail(
+    capsule(
+      jaw,
+      0.007,
+      0.055,
+      infected ? materials.wound : materials.skinDark,
+      [0, -0.005, -headDepth * 0.9],
+      [1, 0.72, 0.55],
+      [0, 0, Math.PI / 2],
+    ),
+  );
+  upperLip.rotation.x = 0.08;
+  characterDetail(
+    capsule(
+      jaw,
+      0.006,
+      0.047,
+      infected ? materials.blood : materials.skinDark,
+      [0, -0.021, -headDepth * 0.895],
+      [1, 0.62, 0.5],
+      [0, 0, Math.PI / 2],
+    ),
+  );
+
   if (infected) {
-    rounded(jaw, [0.17, 0.035, 0.02], materials.wound, [0, -0.06, -0.103], 0.008);
+    characterDetail(
+      rounded(
+        jaw,
+        [headWidth * 1.18, 0.026, 0.018],
+        materials.wound,
+        [0, -0.032, -headDepth * 0.91],
+        0.007,
+      ),
+    );
     for (const side of [-1, 1]) {
-      for (let tooth = 0; tooth < 3; tooth += 1) {
-        addMesh(
-          jaw,
-          new THREE.ConeGeometry(0.009, 0.03, 7),
-          materials.teeth,
-          [side * (0.025 + tooth * 0.021), -0.048, -0.117],
-          [Math.PI, 0, 0],
+      for (let tooth = 0; tooth < 2; tooth += 1) {
+        characterDetail(
+          addMesh(
+            jaw,
+            new THREE.ConeGeometry(0.006, 0.021, 6),
+            materials.teeth,
+            [side * (0.018 + tooth * 0.018), -0.038, -headDepth * 1.02],
+            [Math.PI, 0, 0],
+          ),
         );
       }
     }
-    capsule(
-      headJoint,
-      0.045,
-      0.04,
-      materials.wound,
-      [style === "runner" ? -0.09 : 0.08, 0.27, -0.115],
-      [1.2, 0.55, 0.25],
-      [0.6, 0.2, 0.1],
+    characterDetail(
+      ellipsoid(
+        headJoint,
+        [0.046, 0.026, 0.012],
+        materials.wound,
+        [style === "runner" ? -0.072 : 0.064, 0.165, -headDepth * 0.96],
+        [0.2, 0.18, style === "runner" ? -0.18 : 0.16],
+        10,
+        6,
+      ),
     );
     if (style !== "heavy") {
-      for (let tuft = 0; tuft < 5; tuft += 1) {
-        addMesh(
-          headJoint,
-          new THREE.ConeGeometry(0.035 + tuft * 0.003, 0.13, 7),
-          materials.hair,
-          [-0.09 + tuft * 0.045, 0.34 + (tuft % 2) * 0.025, 0.015],
-          [0, 0, (tuft - 2) * 0.11],
-        );
-      }
+      anatomical(
+        headJoint,
+        [
+          { y: 0.145, width: headWidth * 0.94, depth: headDepth * 0.93, offsetZ: 0.013 },
+          { y: 0.212, width: headWidth * 0.84, depth: headDepth * 0.88, offsetZ: 0.018 },
+          { y: 0.252, width: headWidth * 0.48, depth: headDepth * 0.5, offsetZ: 0.018 },
+        ],
+        materials.hair,
+        [0, 0, 0],
+        [0, 0, style === "runner" ? -0.06 : 0.04],
+        14,
+      );
     }
     return;
   }
 
+  anatomical(
+    headJoint,
+    [
+      { y: 0.13, width: headWidth * 0.99, depth: headDepth * 0.98, offsetZ: 0.012 },
+      { y: 0.205, width: headWidth * 0.91, depth: headDepth * 0.93, offsetZ: 0.017 },
+      { y: 0.254, width: headWidth * 0.48, depth: headDepth * 0.52, offsetZ: 0.018 },
+    ],
+    materials.hair,
+    [0, 0, 0],
+    [0, 0, 0],
+    16,
+  );
+
   if (isMaya) {
-    capsule(headJoint, 0.158, 0.08, materials.hair, [0, 0.27, 0.025], [1.02, 0.56, 1.02]);
-    capsule(headJoint, 0.09, 0.18, materials.hair, [0, 0.18, 0.145], [0.72, 1, 0.72], [0.35, 0, 0]);
     const ponytail = new THREE.Group();
-    ponytail.position.set(0, 0.24, 0.13);
-    capsule(ponytail, 0.055, 0.28, materials.hair, [0, -0.14, 0.05], [0.85, 1, 0.85], [0.48, 0, 0]);
+    ponytail.position.set(0, 0.17, headDepth * 0.82);
+    ellipsoid(
+      ponytail,
+      [0.058, 0.075, 0.052],
+      materials.hair,
+      [0, 0, 0.018],
+      [0.25, 0, 0],
+      12,
+      8,
+    );
+    anatomical(
+      ponytail,
+      [
+        { y: -0.23, width: 0.025, depth: 0.028, offsetZ: 0.045 },
+        { y: -0.14, width: 0.045, depth: 0.043, offsetZ: 0.035 },
+        { y: -0.035, width: 0.055, depth: 0.05, offsetZ: 0.02 },
+        { y: 0.025, width: 0.035, depth: 0.035 },
+      ],
+      materials.hair,
+      [0, 0, 0],
+      [0.28, 0, 0],
+      10,
+    );
     headJoint.add(ponytail);
   } else {
-    for (let tuft = 0; tuft < 9; tuft += 1) {
-      const angle = ((tuft - 4) / 9) * Math.PI;
-      addMesh(
-        headJoint,
-        new THREE.ConeGeometry(0.045, 0.13 + (tuft % 3) * 0.025, 7),
+    characterDetail(
+      anatomical(
+        jaw,
+        [
+          { y: -0.071, width: headWidth * 0.4, depth: headDepth * 0.57, offsetZ: -0.022 },
+          { y: -0.042, width: headWidth * 0.67, depth: headDepth * 0.79, offsetZ: -0.026 },
+          { y: 0.008, width: headWidth * 0.8, depth: headDepth * 0.89, offsetZ: -0.02 },
+        ],
         materials.hair,
-        [Math.sin(angle) * 0.12, 0.34 + Math.cos(angle) * 0.025, 0.025 + Math.cos(angle) * 0.08],
-        [0.08, 0, -Math.sin(angle) * 0.5],
-      );
-    }
-    capsule(headJoint, 0.118, 0.055, materials.hair, [0, 0.07, -0.075], [1.05, 0.58, 0.52]);
+        [0, 0.001, 0.006],
+        [0, 0, 0],
+        14,
+      ),
+    );
   }
 }
 
@@ -557,71 +810,154 @@ function addArm(
   const shoulder = joint(
     torso,
     side < 0 ? "LeftShoulder" : "RightShoulder",
-    [side * shoulderWidth, 0.52, 0],
+    [side * shoulderWidth, 0.47 * armScale, 0],
   );
-  const upperLength = (style === "heavy" ? 0.42 : 0.39) * armScale;
-  const forearmLength = (style === "runner" ? 0.43 : 0.38) * armScale;
-  tapered(
-    shoulder,
-    (style === "heavy" ? 0.14 : 0.105) * armScale,
-    (style === "heavy" ? 0.125 : 0.09) * armScale,
-    upperLength,
-    infected && ((style === "runner" && side === 1) || (style === "walker" && side === -1))
+  const upperLength = (style === "heavy" ? 0.37 : 0.34) * armScale;
+  const forearmLength = (style === "runner" ? 0.34 : 0.32) * armScale;
+  const armMaterial =
+    infected &&
+    ((style === "runner" && side === 1) ||
+      (style === "walker" && side === -1))
       ? materials.skin
-      : materials.uniform,
-    [0, -upperLength / 2, 0],
+      : materials.uniform;
+  anatomical(
+    shoulder,
+    [
+      {
+        y: 0,
+        width: (style === "heavy" ? 0.145 : 0.105) * armScale,
+        depth: (style === "heavy" ? 0.13 : 0.095) * armScale,
+      },
+      {
+        y: -upperLength * 0.38,
+        width: (style === "heavy" ? 0.13 : 0.095) * armScale,
+        depth: (style === "heavy" ? 0.12 : 0.085) * armScale,
+      },
+      {
+        y: -upperLength,
+        width: (style === "heavy" ? 0.095 : 0.072) * armScale,
+        depth: (style === "heavy" ? 0.09 : 0.068) * armScale,
+      },
+    ],
+    armMaterial,
   );
   const elbow = joint(
     shoulder,
     side < 0 ? "LeftElbow" : "RightElbow",
     [0, -upperLength, 0],
   );
-  capsule(
+  ellipsoid(
     elbow,
-    0.085 * armScale,
-    0.018,
+    [
+      (style === "heavy" ? 0.098 : 0.074) * armScale,
+      (style === "heavy" ? 0.086 : 0.066) * armScale,
+      (style === "heavy" ? 0.09 : 0.07) * armScale,
+    ],
     infected ? materials.skinDark : materials.uniform,
     [0, 0, 0],
+    [0, 0, 0],
+    12,
+    8,
   );
-  tapered(
+  anatomical(
     elbow,
-    (style === "heavy" ? 0.12 : 0.085) * armScale,
-    (style === "heavy" ? 0.095 : 0.07) * armScale,
-    forearmLength,
+    [
+      {
+        y: -0.006,
+        width: (style === "heavy" ? 0.096 : 0.073) * armScale,
+        depth: (style === "heavy" ? 0.092 : 0.069) * armScale,
+      },
+      {
+        y: -forearmLength * 0.44,
+        width: (style === "heavy" ? 0.112 : 0.083) * armScale,
+        depth: (style === "heavy" ? 0.102 : 0.075) * armScale,
+      },
+      {
+        y: -forearmLength,
+        width: (style === "heavy" ? 0.07 : 0.052) * armScale,
+        depth: (style === "heavy" ? 0.066 : 0.05) * armScale,
+      },
+    ],
     infected && (style !== "heavy" || side === 1) ? materials.skin : materials.uniform,
-    [0, -forearmLength / 2, 0],
   );
   const wrist = joint(
     elbow,
     side < 0 ? "LeftWrist" : "RightWrist",
     [0, -forearmLength, 0],
   );
-  capsule(
+
+  const handMaterial = infected ? materials.skin : materials.rubber;
+  anatomical(
     wrist,
-    0.072 * armScale,
-    0.09 * armScale,
-    infected ? materials.skin : materials.rubber,
-    [0, -0.07 * armScale, -0.01],
-    [0.86, 1, 0.65],
+    [
+      {
+        y: 0,
+        width: 0.053 * armScale,
+        depth: 0.045 * armScale,
+      },
+      {
+        y: -0.07 * armScale,
+        width: 0.071 * armScale,
+        depth: 0.038 * armScale,
+        offsetZ: -0.012,
+      },
+      {
+        y: -0.14 * armScale,
+        width: 0.052 * armScale,
+        depth: 0.031 * armScale,
+        offsetZ: -0.017,
+      },
+    ],
+    handMaterial,
+    [0, 0, 0],
+    [0.08, 0, 0],
+    12,
+  );
+  characterDetail(
+    capsule(
+      wrist,
+      0.018 * armScale,
+      0.065 * armScale,
+      handMaterial,
+      [side * 0.065 * armScale, -0.075 * armScale, -0.004],
+      [0.88, 1, 0.8],
+      [0.15, 0, side * 0.62],
+    ),
   );
 
   if (infected) {
-    capsule(
-      shoulder,
-      0.048,
-      0.07,
-      materials.wound,
-      [side * 0.02, -upperLength * 0.42, -0.09],
-      [1.3, 0.62, 0.24],
-      [0.28, 0.2, side * 0.3],
+    characterDetail(
+      ellipsoid(
+        shoulder,
+        [0.052, 0.075, 0.014],
+        materials.wound,
+        [side * 0.02, -upperLength * 0.42, -0.087],
+        [0.28, 0.2, side * 0.3],
+        10,
+        6,
+      ),
     );
-    for (let nail = 0; nail < 3; nail += 1) {
-      addMesh(
-        wrist,
-        new THREE.ConeGeometry(0.009, 0.055, 6),
-        materials.bone,
-        [(nail - 1) * 0.03, -0.14, -0.025],
-        [Math.PI, 0, 0],
+    for (let finger = 0; finger < 4; finger += 1) {
+      const x = (finger - 1.5) * 0.025 * armScale;
+      characterDetail(
+        capsule(
+          wrist,
+          0.011 * armScale,
+          (0.065 - Math.abs(finger - 1.5) * 0.006) * armScale,
+          materials.skinDark,
+          [x, -0.165 * armScale, -0.02],
+          [0.88, 1, 0.76],
+          [0.08 + finger * 0.018, 0, (finger - 1.5) * -0.03],
+        ),
+      );
+      characterDetail(
+        addMesh(
+          wrist,
+          new THREE.ConeGeometry(0.006, 0.026, 5),
+          materials.bone,
+          [x, -0.222 * armScale, -0.021],
+          [Math.PI, 0, 0],
+        ),
       );
     }
   }
@@ -640,73 +976,113 @@ function addLeg(
   const hip = joint(
     pelvis,
     side < 0 ? "LeftHip" : "RightHip",
-    [side * hipWidth, -0.06, 0],
+    [side * hipWidth, -0.055 * legScale, 0],
   );
-  const thighLength = (style === "heavy" ? 0.48 : 0.46) * legScale;
-  const calfLength = (style === "runner" ? 0.48 : 0.43) * legScale;
-  tapered(
+  const thighLength = (style === "heavy" ? 0.45 : 0.43) * legScale;
+  const calfLength = (style === "runner" ? 0.45 : 0.42) * legScale;
+  anatomical(
     hip,
-    (style === "heavy" ? 0.18 : 0.135) * legScale,
-    (style === "heavy" ? 0.145 : 0.105) * legScale,
-    thighLength,
+    [
+      {
+        y: 0,
+        width: (style === "heavy" ? 0.175 : 0.132) * legScale,
+        depth: (style === "heavy" ? 0.16 : 0.125) * legScale,
+      },
+      {
+        y: -thighLength * 0.48,
+        width: (style === "heavy" ? 0.155 : 0.12) * legScale,
+        depth: (style === "heavy" ? 0.145 : 0.112) * legScale,
+        offsetZ: 0.006,
+      },
+      {
+        y: -thighLength,
+        width: (style === "heavy" ? 0.105 : 0.082) * legScale,
+        depth: (style === "heavy" ? 0.1 : 0.079) * legScale,
+      },
+    ],
     materials.uniform,
-    [0, -thighLength / 2, 0],
   );
   const knee = joint(
     hip,
     side < 0 ? "LeftKnee" : "RightKnee",
     [0, -thighLength, 0],
   );
-  capsule(
+  ellipsoid(
     knee,
-    (style === "heavy" ? 0.13 : 0.095) * legScale,
-    0.02,
+    [
+      (style === "heavy" ? 0.115 : 0.087) * legScale,
+      (style === "heavy" ? 0.105 : 0.079) * legScale,
+      (style === "heavy" ? 0.105 : 0.083) * legScale,
+    ],
     infected ? materials.skinDark : materials.uniformSecondary,
     [0, 0, 0],
+    [0, 0, 0],
+    12,
+    8,
   );
-  tapered(
+  anatomical(
     knee,
-    (style === "heavy" ? 0.14 : 0.105) * legScale,
-    (style === "heavy" ? 0.1 : 0.075) * legScale,
-    calfLength,
+    [
+      {
+        y: -0.008,
+        width: (style === "heavy" ? 0.108 : 0.083) * legScale,
+        depth: (style === "heavy" ? 0.102 : 0.08) * legScale,
+      },
+      {
+        y: -calfLength * 0.42,
+        width: (style === "heavy" ? 0.135 : 0.101) * legScale,
+        depth: (style === "heavy" ? 0.125 : 0.09) * legScale,
+        offsetZ: 0.012,
+      },
+      {
+        y: -calfLength,
+        width: (style === "heavy" ? 0.082 : 0.061) * legScale,
+        depth: (style === "heavy" ? 0.078 : 0.059) * legScale,
+      },
+    ],
     materials.uniformSecondary,
-    [0, -calfLength / 2, 0],
   );
   const ankle = joint(
     knee,
     side < 0 ? "LeftAnkle" : "RightAnkle",
     [0, -calfLength, 0],
   );
+  ellipsoid(
+    ankle,
+    [
+      (style === "heavy" ? 0.135 : 0.105) * legScale,
+      (style === "heavy" ? 0.105 : 0.082) * legScale,
+      (style === "heavy" ? 0.235 : 0.205) * legScale,
+    ],
+    materials.rubber,
+    [0, -0.062 * legScale, -0.105 * legScale],
+    [-0.08, 0, 0],
+    14,
+    8,
+  );
   rounded(
     ankle,
     [
-      (style === "heavy" ? 0.28 : 0.22) * legScale,
-      0.19 * legScale,
-      (style === "heavy" ? 0.42 : 0.36) * legScale,
+      (style === "heavy" ? 0.245 : 0.19) * legScale,
+      0.035 * legScale,
+      (style === "heavy" ? 0.42 : 0.355) * legScale,
     ],
-    materials.rubber,
-    [0, -0.075 * legScale, -0.07 * legScale],
-    0.055,
+    materials.webbing,
+    [0, -0.127 * legScale, -0.095 * legScale],
+    0.016,
   );
   if (infected) {
-    capsule(
-      knee,
-      0.045,
-      0.08,
-      materials.blood,
-      [side * 0.05, -calfLength * 0.22, -0.1],
-      [1.4, 0.75, 0.2],
-      [0.35, 0, side * 0.2],
+    characterDetail(
+      ellipsoid(
+        knee,
+        [0.052, 0.075, 0.015],
+        materials.blood,
+        [side * 0.045, -calfLength * 0.22, -0.083],
+        [0.35, 0, side * 0.2],
+        10,
+        6,
+      ),
     );
-    const tornCuff = addMesh(
-      knee,
-      new THREE.TorusGeometry(0.09 * legScale, 0.022, 7, 18),
-      materials.uniform,
-      [0, -0.045, 0],
-      [Math.PI / 2, 0, 0],
-      [1.15, 1, 1],
-    );
-    tornCuff.castShadow = true;
   }
   return { hip, knee, ankle };
 }
@@ -718,13 +1094,37 @@ function addSurvivorGear(
   style: "hero" | "maya",
 ) {
   const isMaya = style === "maya";
-  capsule(
+  anatomical(
     torso,
-    isMaya ? 0.235 : 0.27,
-    0.34,
+    [
+      {
+        y: 0.12,
+        width: isMaya ? 0.205 : 0.235,
+        depth: isMaya ? 0.135 : 0.15,
+        offsetZ: -0.004,
+      },
+      {
+        y: 0.3,
+        width: isMaya ? 0.235 : 0.275,
+        depth: isMaya ? 0.15 : 0.17,
+        offsetZ: -0.009,
+      },
+      {
+        y: 0.49,
+        width: isMaya ? 0.247 : 0.29,
+        depth: isMaya ? 0.145 : 0.165,
+        offsetZ: -0.004,
+      },
+      {
+        y: 0.535,
+        width: isMaya ? 0.19 : 0.22,
+        depth: isMaya ? 0.12 : 0.135,
+      },
+    ],
     materials.vest,
-    [0, 0.31, -0.004],
-    [isMaya ? 1.02 : 1.12, 1, 0.68],
+    [0, 0, 0],
+    [0, 0, 0],
+    14,
   );
   const backpack = new THREE.Group();
   backpack.position.set(0, 0.3, 0.19);
@@ -805,13 +1205,35 @@ function addInfectedDetails(
   materials: CharacterMaterials,
   style: "walker" | "runner" | "heavy",
 ) {
-  capsule(
+  anatomical(
     torso,
-    style === "heavy" ? 0.34 : 0.25,
-    style === "heavy" ? 0.4 : 0.32,
+    [
+      {
+        y: 0.11,
+        width: style === "heavy" ? 0.31 : 0.205,
+        depth: style === "heavy" ? 0.2 : 0.135,
+      },
+      {
+        y: 0.3,
+        width: style === "heavy" ? 0.375 : 0.255,
+        depth: style === "heavy" ? 0.225 : 0.155,
+        offsetZ: -0.01,
+      },
+      {
+        y: 0.5,
+        width: style === "heavy" ? 0.39 : 0.28,
+        depth: style === "heavy" ? 0.21 : 0.15,
+      },
+      {
+        y: 0.54,
+        width: style === "heavy" ? 0.28 : 0.19,
+        depth: style === "heavy" ? 0.16 : 0.115,
+      },
+    ],
     materials.vest,
-    [0, 0.3, 0],
-    [style === "heavy" ? 1.24 : 1.06, 1, 0.68],
+    [0, 0, 0],
+    [0, 0, 0],
+    14,
   );
   const chestWound = capsule(
     chest,
@@ -865,54 +1287,105 @@ function createOriginalCharacter(style: AnimatedStyle): AnimatedCharacter {
   const isMaya = style === "maya";
   const height =
     style === "hero"
-      ? 2.02
+      ? 1.86
       : isMaya
-        ? 1.9
+        ? 1.73
         : style === "runner"
-          ? 1.96
+          ? 1.82
           : style === "heavy"
-            ? 2.19
-            : 2.03;
-  const bodyScale = height / 2.02;
+            ? 2.02
+            : 1.84;
+  const bodyScale = height / 1.86;
   const shoulderWidth =
-    (style === "heavy" ? 0.39 : isMaya ? 0.275 : style === "runner" ? 0.29 : 0.325) *
+    (style === "heavy" ? 0.395 : isMaya ? 0.278 : style === "runner" ? 0.305 : 0.34) *
     bodyScale;
   const hipWidth =
-    (style === "heavy" ? 0.23 : isMaya ? 0.17 : 0.19) * bodyScale;
-  const pelvis = joint(model, "Pelvis", [0, 1.01 * bodyScale, 0]);
-  capsule(
+    (style === "heavy" ? 0.235 : isMaya ? 0.18 : 0.195) * bodyScale;
+  const pelvis = joint(model, "Pelvis", [0, 0.94 * bodyScale, 0]);
+  anatomical(
     pelvis,
-    style === "heavy" ? 0.25 : isMaya ? 0.19 : 0.21,
-    style === "heavy" ? 0.18 : 0.14,
-    materials.uniformSecondary,
-    [0, 0.02, 0],
-    [1.12, 0.82, 0.72],
-  );
-  const torso = joint(pelvis, "Torso", [0, 0.1 * bodyScale, 0]);
-  const chest = joint(torso, "Chest", [0, 0.22 * bodyScale, 0]);
-  capsule(
-    torso,
-    style === "heavy" ? 0.35 : isMaya ? 0.245 : 0.28,
-    style === "heavy" ? 0.42 : 0.38,
-    materials.uniform,
-    [0, 0.3 * bodyScale, 0],
     [
-      style === "heavy" ? 1.16 : isMaya ? 1 : 1.08,
-      1,
-      style === "heavy" ? 0.74 : 0.67,
+      {
+        y: -0.11 * bodyScale,
+        width: (style === "heavy" ? 0.21 : isMaya ? 0.165 : 0.18) * bodyScale,
+        depth: (style === "heavy" ? 0.15 : 0.125) * bodyScale,
+      },
+      {
+        y: -0.015 * bodyScale,
+        width: (style === "heavy" ? 0.265 : isMaya ? 0.21 : 0.225) * bodyScale,
+        depth: (style === "heavy" ? 0.18 : 0.145) * bodyScale,
+      },
+      {
+        y: 0.12 * bodyScale,
+        width: (style === "heavy" ? 0.235 : isMaya ? 0.19 : 0.205) * bodyScale,
+        depth: (style === "heavy" ? 0.17 : 0.135) * bodyScale,
+      },
     ],
+    materials.uniformSecondary,
+    [0, 0, 0],
+    [0, 0, 0],
+    14,
   );
-  const neck = joint(torso, "Neck", [0, 0.67 * bodyScale, 0]);
-  capsule(
+  const torso = joint(pelvis, "Torso", [0, 0.065 * bodyScale, 0]);
+  const chest = joint(torso, "Chest", [0, 0.27 * bodyScale, 0]);
+  anatomical(
+    torso,
+    [
+      {
+        y: 0.035 * bodyScale,
+        width: (style === "heavy" ? 0.24 : isMaya ? 0.175 : 0.2) * bodyScale,
+        depth: (style === "heavy" ? 0.17 : 0.125) * bodyScale,
+      },
+      {
+        y: 0.18 * bodyScale,
+        width: (style === "heavy" ? 0.285 : isMaya ? 0.205 : 0.235) * bodyScale,
+        depth: (style === "heavy" ? 0.195 : isMaya ? 0.142 : 0.155) * bodyScale,
+        offsetZ: -0.004,
+      },
+      {
+        y: 0.39 * bodyScale,
+        width: (style === "heavy" ? 0.365 : isMaya ? 0.255 : 0.305) * bodyScale,
+        depth: (style === "heavy" ? 0.22 : isMaya ? 0.16 : 0.185) * bodyScale,
+        offsetZ: -0.01,
+      },
+      {
+        y: 0.51 * bodyScale,
+        width: (style === "heavy" ? 0.39 : isMaya ? 0.278 : 0.335) * bodyScale,
+        depth: (style === "heavy" ? 0.21 : isMaya ? 0.15 : 0.175) * bodyScale,
+      },
+      {
+        y: 0.56 * bodyScale,
+        width: (style === "heavy" ? 0.27 : isMaya ? 0.18 : 0.21) * bodyScale,
+        depth: (style === "heavy" ? 0.16 : 0.115) * bodyScale,
+      },
+    ],
+    materials.uniform,
+    [0, 0, 0],
+    [0, 0, 0],
+    16,
+  );
+  const neck = joint(torso, "Neck", [0, 0.565 * bodyScale, 0]);
+  anatomical(
     neck,
-    style === "heavy" ? 0.105 : 0.078,
-    0.08,
+    [
+      {
+        y: -0.015 * bodyScale,
+        width: (style === "heavy" ? 0.115 : 0.075) * bodyScale,
+        depth: (style === "heavy" ? 0.1 : 0.067) * bodyScale,
+      },
+      {
+        y: 0.105 * bodyScale,
+        width: (style === "heavy" ? 0.105 : 0.069) * bodyScale,
+        depth: (style === "heavy" ? 0.095 : 0.064) * bodyScale,
+      },
+    ],
     materials.skinDark,
-    [0, 0.03, 0],
-    [1, 1, 0.92],
+    [0, 0, 0],
+    [0.05, 0, 0],
+    12,
   );
-  const head = joint(neck, "Head", [0, 0.06 * bodyScale, 0]);
-  const jaw = joint(head, "Jaw", [0, 0.07, -0.02]);
+  const head = joint(neck, "Head", [0, 0.095 * bodyScale, 0]);
+  const jaw = joint(head, "Jaw", [0, 0, 0]);
   addHumanHead(head, jaw, materials, style);
 
   const leftArm = addArm(torso, -1, materials, style, shoulderWidth, bodyScale);
@@ -959,11 +1432,15 @@ function createOriginalCharacter(style: AnimatedStyle): AnimatedCharacter {
 
   const root = new THREE.Group();
   root.add(model);
-  const flashMaterials: THREE.MeshStandardMaterial[] = [];
+  const flashMaterialSet = new Set<THREE.MeshStandardMaterial>();
+  const detailNodes: THREE.Object3D[] = [];
   model.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
-    object.castShadow = true;
-    object.receiveShadow = true;
+    object.receiveShadow = false;
+    if (object.userData.characterDetail) {
+      object.castShadow = false;
+      detailNodes.push(object);
+    }
     const objectMaterials = Array.isArray(object.material)
       ? object.material
       : [object.material];
@@ -972,7 +1449,7 @@ function createOriginalCharacter(style: AnimatedStyle): AnimatedCharacter {
         material instanceof THREE.MeshStandardMaterial &&
         material !== materials.eye
       ) {
-        flashMaterials.push(material);
+        flashMaterialSet.add(material);
       }
     }
   });
@@ -1006,7 +1483,9 @@ function createOriginalCharacter(style: AnimatedStyle): AnimatedCharacter {
     elapsed: Math.random() * 5,
     stateTime: 0,
     state: "idle",
-    flashMaterials,
+    flashMaterials: [...flashMaterialSet],
+    detailNodes,
+    detailsVisible: true,
   };
 }
 
@@ -1094,6 +1573,14 @@ function movementPose(
   rotateTo(rig.pelvis, 0, gait * 0.055, -gait * 0.035, delta);
   rotateTo(rig.torso, hunch, -gait * 0.075, gait * 0.025, delta);
   rotateTo(
+    rig.chest,
+    running ? -0.035 : 0,
+    gait * (infected ? 0.055 : 0.105),
+    -gait * 0.018,
+    delta,
+    10,
+  );
+  rotateTo(
     rig.head,
     infected ? -hunch * 0.42 + Math.sin(character.elapsed * 2.1) * 0.035 : -hunch * 0.58,
     infected ? Math.sin(character.elapsed * 1.37) * 0.1 : gait * 0.025,
@@ -1103,10 +1590,34 @@ function movementPose(
   );
   rotateTo(rig.leftHip, gait * stride, 0, 0.025, delta);
   rotateTo(rig.rightHip, opposite * stride, 0, -0.025, delta);
-  rotateTo(rig.leftKnee, liftLeft * (running ? 0.95 : 0.58), 0, 0, delta);
-  rotateTo(rig.rightKnee, liftRight * (running ? 0.95 : 0.58), 0, 0, delta);
-  rotateTo(rig.leftAnkle, -gait * 0.18, 0, 0, delta);
-  rotateTo(rig.rightAnkle, -opposite * 0.18, 0, 0, delta);
+  rotateTo(
+    rig.leftKnee,
+    0.04 + liftLeft * (running ? 1.02 : 0.62),
+    0,
+    0,
+    delta,
+  );
+  rotateTo(
+    rig.rightKnee,
+    0.04 + liftRight * (running ? 1.02 : 0.62),
+    0,
+    0,
+    delta,
+  );
+  rotateTo(
+    rig.leftAnkle,
+    -gait * (running ? 0.28 : 0.2) - liftLeft * 0.12,
+    0,
+    0,
+    delta,
+  );
+  rotateTo(
+    rig.rightAnkle,
+    -opposite * (running ? 0.28 : 0.2) - liftRight * 0.12,
+    0,
+    0,
+    delta,
+  );
 
   if (!attacking) {
     const armStride = infected
@@ -1129,8 +1640,20 @@ function movementPose(
       infected ? 0.12 : 0.055,
       delta,
     );
-    rotateTo(rig.leftElbow, infected ? -0.28 : Math.max(0, gait) * -0.25, 0, 0, delta);
-    rotateTo(rig.rightElbow, infected ? -0.2 : Math.max(0, opposite) * -0.25, 0, 0, delta);
+    rotateTo(
+      rig.leftElbow,
+      infected ? -0.36 : -0.08 - Math.max(0, gait) * 0.3,
+      0,
+      0,
+      delta,
+    );
+    rotateTo(
+      rig.rightElbow,
+      infected ? -0.28 : -0.08 - Math.max(0, opposite) * 0.3,
+      0,
+      0,
+      delta,
+    );
   }
   character.model.position.y = damp(
     character.model.position.y,
@@ -1152,6 +1675,7 @@ function idlePose(character: AnimatedCharacter, delta: number) {
     style === "runner" ? 0.3 : style === "walker" ? 0.19 : style === "heavy" ? 0.13 : 0;
   rotateTo(rig.pelvis, 0, 0, breath * 0.012, delta, 7);
   rotateTo(rig.torso, hunch + breath * 0.012, 0, breath * 0.009, delta, 7);
+  rotateTo(rig.chest, breath * 0.012, 0, -breath * 0.006, delta, 6);
   rotateTo(
     rig.head,
     infected ? -hunch * 0.38 + twitch : 0,
@@ -1197,12 +1721,15 @@ function attackPose(character: AnimatedCharacter, delta: number) {
   const follow = Math.sin(Math.min(1, phase * 1.3) * Math.PI);
 
   if (!infected) {
-    rotateTo(rig.torso, 0.08, -0.58 + phase * 1.1, -0.16 * strike, delta, 18);
-    rotateTo(rig.rightShoulder, -1.72 + phase * 2.8, -0.22, 0.62 - phase * 1.1, delta, 21);
-    rotateTo(rig.rightElbow, -0.72 + phase * 0.46, 0, -0.18, delta, 20);
-    rotateTo(rig.leftShoulder, -0.84 + phase * 0.62, 0.18, -0.42, delta, 18);
-    rotateTo(rig.leftElbow, -0.9, 0, 0.12, delta, 18);
-    rotateTo(rig.head, -0.08, 0.28 - phase * 0.48, 0, delta, 14);
+    const swing = phase * phase * (3 - 2 * phase);
+    rotateTo(rig.pelvis, 0, 0.22 - swing * 0.38, 0, delta, 16);
+    rotateTo(rig.torso, 0.1 - strike * 0.08, -0.72 + swing * 1.36, -0.18 * strike, delta, 19);
+    rotateTo(rig.chest, -0.05, -0.18 + swing * 0.34, -0.11 * strike, delta, 19);
+    rotateTo(rig.rightShoulder, -2.08 + swing * 3.25, -0.26, 0.66 - swing * 1.18, delta, 23);
+    rotateTo(rig.rightElbow, -0.78 + swing * 0.34, 0, -0.16, delta, 22);
+    rotateTo(rig.leftShoulder, -1.66 + swing * 2.55, 0.22, -0.48 + swing * 0.72, delta, 21);
+    rotateTo(rig.leftElbow, -1.02 + swing * 0.3, 0, 0.14, delta, 21);
+    rotateTo(rig.head, -0.07, 0.32 - swing * 0.58, 0, delta, 15);
     rotateTo(rig.leftHip, -follow * 0.18, 0, 0, delta);
     rotateTo(rig.rightHip, follow * 0.18, 0, 0, delta);
     return;
@@ -1215,11 +1742,12 @@ function attackPose(character: AnimatedCharacter, delta: number) {
     rotateTo(rig.leftElbow, -0.48, 0, 0, delta);
     rotateTo(rig.rightElbow, -0.48, 0, 0, delta);
   } else {
-    rotateTo(rig.torso, 0.32 - strike * 0.16, phase * 0.25, 0, delta, 17);
-    rotateTo(rig.leftShoulder, -0.78 - strike * 0.9, 0, -0.16, delta, 18);
-    rotateTo(rig.rightShoulder, -0.82 - strike * 0.95, 0, 0.16, delta, 18);
-    rotateTo(rig.leftElbow, -0.18 - strike * 0.34, 0, 0, delta);
-    rotateTo(rig.rightElbow, -0.2 - strike * 0.3, 0, 0, delta);
+    rotateTo(rig.torso, 0.38 - strike * 0.26, phase * 0.22, 0, delta, 18);
+    rotateTo(rig.chest, -strike * 0.12, phase * 0.1, 0, delta, 18);
+    rotateTo(rig.leftShoulder, -0.72 - strike * 1.12, 0.12, -0.2, delta, 20);
+    rotateTo(rig.rightShoulder, -0.78 - strike * 1.18, -0.12, 0.2, delta, 20);
+    rotateTo(rig.leftElbow, -0.52 + strike * 0.34, 0, 0, delta, 20);
+    rotateTo(rig.rightElbow, -0.5 + strike * 0.3, 0, 0, delta, 20);
   }
   rotateTo(rig.head, -0.06, Math.sin(phase * Math.PI) * 0.18, 0, delta, 16);
   character.rig.jaw.rotation.x = damp(
@@ -1235,6 +1763,7 @@ function shootPose(character: AnimatedCharacter, delta: number) {
   const recoil = Math.max(0, Math.sin(character.stateTime * 22)) *
     Math.exp(-character.stateTime * 5);
   rotateTo(rig.torso, 0.03, -0.12, 0, delta, 18);
+  rotateTo(rig.chest, -0.025, -0.08, 0, delta, 18);
   rotateTo(rig.rightShoulder, -1.46 + recoil * 0.16, -0.08, 0.12, delta, 20);
   rotateTo(rig.rightElbow, -0.22, 0, 0, delta, 20);
   rotateTo(rig.leftShoulder, -1.21, 0.28, -0.32, delta, 20);
@@ -1247,6 +1776,7 @@ function hitPose(character: AnimatedCharacter, delta: number) {
   const phase = THREE.MathUtils.clamp(character.stateTime / 0.38, 0, 1);
   const impact = Math.sin(phase * Math.PI);
   rotateTo(rig.torso, -0.18 * impact, 0.22 * impact, 0.2 * impact, delta, 24);
+  rotateTo(rig.chest, -0.12 * impact, -0.16 * impact, 0.14 * impact, delta, 24);
   rotateTo(rig.head, 0.22 * impact, -0.18 * impact, -0.14 * impact, delta, 24);
   rotateTo(rig.leftShoulder, 0.5 * impact, 0, -0.34, delta, 22);
   rotateTo(rig.rightShoulder, -0.42 * impact, 0, 0.28, delta, 22);
@@ -1258,6 +1788,7 @@ function deathPose(character: AnimatedCharacter, delta: number) {
   const eased = 1 - Math.pow(1 - phase, 3);
   const side = style === "runner" ? -1 : 1;
   rotateTo(rig.torso, 0.42 * eased, 0.18 * side, 0.55 * side * eased, delta, 10);
+  rotateTo(rig.chest, 0.2 * eased, -0.12 * side, 0.2 * side * eased, delta, 9);
   rotateTo(rig.head, -0.18 * eased, 0, 0.35 * side * eased, delta, 9);
   rotateTo(rig.leftShoulder, 0.72 * eased, 0, -0.62, delta, 9);
   rotateTo(rig.rightShoulder, -0.6 * eased, 0, 0.66, delta, 9);
@@ -1328,6 +1859,15 @@ export function setCharacterHitFlash(
     material.emissiveIntensity =
       normalized > 0 ? normalized * 2.2 : baseIntensity;
   }
+}
+
+export function setCharacterDetail(
+  character: AnimatedCharacter,
+  visible: boolean,
+) {
+  if (character.detailsVisible === visible) return;
+  character.detailsVisible = visible;
+  for (const object of character.detailNodes) object.visible = visible;
 }
 
 export function disposeAnimatedCharacter(character: AnimatedCharacter) {

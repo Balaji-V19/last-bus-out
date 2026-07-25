@@ -11,6 +11,7 @@ import {
   createAnimatedCharacter,
   disposeAnimatedCharacter,
   setAnimatedEquipment,
+  setCharacterDetail,
   setCharacterHitFlash,
   updateAnimatedCharacter,
   type AnimatedCharacter,
@@ -288,15 +289,24 @@ export const GameViewport3D = forwardRef<
     const camera = new THREE.PerspectiveCamera(58, 1, 0.08, 210);
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
-      powerPreference: "high-performance",
+      alpha: false,
+      stencil: false,
+      precision: "mediump",
+      powerPreference: "low-power",
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+    const pixelRatioLimit = coarsePointer ? 1 : 1.2;
+    renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio || 1, pixelRatioLimit),
+    );
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure =
       props.chapter === "hospital" || props.chapter === "depot" ? 1.02 : 1.18;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.shadowMap.type = THREE.BasicShadowMap;
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
     renderer.domElement.className = "three-canvas";
     renderer.domElement.setAttribute(
       "aria-label",
@@ -307,9 +317,29 @@ export const GameViewport3D = forwardRef<
     const world = buildWorld(props.chapter);
     scene.add(world.root);
     const flickerLights: THREE.Light[] = [];
+    const localLights: Array<THREE.PointLight | THREE.SpotLight> = [];
+    const shadowScale = new THREE.Vector3();
+    world.root.updateMatrixWorld(true);
     world.root.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.castShadow) {
+        if (!object.geometry.boundingSphere) {
+          object.geometry.computeBoundingSphere();
+        }
+        object.getWorldScale(shadowScale);
+        const shadowRadius =
+          (object.geometry.boundingSphere?.radius ?? 1) *
+          Math.max(shadowScale.x, shadowScale.y, shadowScale.z);
+        if (shadowRadius < 0.3) object.castShadow = false;
+      }
       if (object instanceof THREE.Light && object.userData.flicker) {
         flickerLights.push(object);
+      }
+      if (
+        object instanceof THREE.PointLight ||
+        object instanceof THREE.SpotLight
+      ) {
+        localLights.push(object);
+        object.visible = false;
       }
     });
 
@@ -325,8 +355,7 @@ export const GameViewport3D = forwardRef<
       1.35,
     );
     flashlight.position.set(0.28, 1.46, -0.34);
-    flashlight.castShadow = true;
-    flashlight.shadow.mapSize.set(1024, 1024);
+    flashlight.castShadow = false;
     const flashlightTarget = new THREE.Object3D();
     flashlightTarget.position.set(0.1, 1.02, -10);
     flashlight.target = flashlightTarget;
@@ -354,7 +383,7 @@ export const GameViewport3D = forwardRef<
       roughness: 0.74,
       metalness: 0.02,
     });
-    const bloodDecalMaterial = new THREE.MeshPhysicalMaterial({
+    const bloodDecalMaterial = new THREE.MeshStandardMaterial({
       color: 0x4d0c09,
       transparent: true,
       opacity: 0.76,
@@ -404,6 +433,9 @@ export const GameViewport3D = forwardRef<
     let heartbeatClock = 0;
     let horrorPulse = 0;
     let cameraShake = 0;
+    let localLightClock = 0;
+    let shadowUpdateClock = 0;
+    let lastRenderTime = performance.now() - 30;
     const scareFlags = new Set<string>();
     let lastFrameTime = performance.now();
 
@@ -421,13 +453,44 @@ export const GameViewport3D = forwardRef<
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(mount);
 
+    const localLightPosition = new THREE.Vector3();
+    const updateLocalLightBudget = (delta: number) => {
+      localLightClock -= delta;
+      if (localLightClock > 0) return;
+      localLightClock = 0.45;
+      const lightBudget =
+        propsRef.current.chapter === "hospital" ||
+        propsRef.current.chapter === "depot"
+          ? 5
+          : 4;
+      const nearestLights = localLights
+        .map((light) => {
+          light.getWorldPosition(localLightPosition);
+          return {
+            light,
+            distance: localLightPosition.distanceToSquared(playerRoot.position),
+          };
+        })
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, lightBudget);
+      const activeLights = new Set(nearestLights.map(({ light }) => light));
+      for (const light of localLights) {
+        light.visible = activeLights.has(light);
+      }
+    };
+
     const spawnBlood = (
       position: THREE.Vector3,
       direction: THREE.Vector3,
       count: number,
     ) => {
       const normalizedDirection = direction.clone().normalize();
-      for (let index = 0; index < count; index += 1) {
+      const particleCount = Math.min(
+        count,
+        14,
+        Math.max(0, 56 - bloodParticles.length),
+      );
+      for (let index = 0; index < particleCount; index += 1) {
         const mesh = new THREE.Mesh(bloodGeometry, bloodMaterial);
         mesh.scale.setScalar(0.58 + Math.random() * 1.18);
         mesh.position.copy(position);
@@ -453,9 +516,9 @@ export const GameViewport3D = forwardRef<
     };
 
     const spawnBloodDecal = (position: THREE.Vector3) => {
-      if (bloodDecals.length >= 24) return;
+      if (bloodDecals.length >= 12) return;
       const decal = new THREE.Mesh(
-        new THREE.CircleGeometry(0.12 + Math.random() * 0.2, 14),
+        new THREE.CircleGeometry(0.12 + Math.random() * 0.2, 10),
         bloodDecalMaterial.clone(),
       );
       decal.rotation.x = -Math.PI / 2;
@@ -934,11 +997,22 @@ export const GameViewport3D = forwardRef<
 
     const animate = (timestamp = performance.now()) => {
       animationFrame = requestAnimationFrame(animate);
+      if (document.hidden) {
+        lastFrameTime = timestamp;
+        lastRenderTime = timestamp;
+        return;
+      }
+      const current = propsRef.current;
+      const frameInterval = current.mode === "playing" ? 1000 / 40 : 1000 / 10;
+      const timeSinceRender = timestamp - lastRenderTime;
+      if (timeSinceRender < frameInterval) return;
+      lastRenderTime =
+        timestamp - (timeSinceRender % Math.max(1, frameInterval));
       const delta = Math.min((timestamp - lastFrameTime) / 1000, 0.034);
       lastFrameTime = timestamp;
       elapsedTime += delta;
       const time = elapsedTime;
-      const current = propsRef.current;
+      updateLocalLightBudget(delta);
       syncWorldState(time);
 
       if (current.mode === "playing") {
@@ -1177,6 +1251,7 @@ export const GameViewport3D = forwardRef<
                       : "walk"
                     : "idle";
             updateAnimatedCharacter(enemy.character, delta, enemyState);
+            setCharacterDetail(enemy.character, distance < 13);
             setCharacterHitFlash(
               enemy.character,
               enemy.hitTimer > 0 ? enemy.hitTimer : 0,
@@ -1185,7 +1260,13 @@ export const GameViewport3D = forwardRef<
 
           enemy.healthBar.group.position
             .copy(enemy.root.position)
-            .add(new THREE.Vector3(0, 2.36, 0));
+            .add(
+              new THREE.Vector3(
+                0,
+                (enemy.character?.height ?? 1.9) + 0.24,
+                0,
+              ),
+            );
           enemy.healthBar.group.quaternion.copy(camera.quaternion);
           enemy.healthBar.group.visible =
             distance < 25 || enemy.hp < enemy.maxHp;
@@ -1473,6 +1554,7 @@ export const GameViewport3D = forwardRef<
             );
           }
           if (maya.character) {
+            setCharacterDetail(maya.character, distance < 10);
             updateAnimatedCharacter(
               maya.character,
               delta,
@@ -1547,6 +1629,15 @@ export const GameViewport3D = forwardRef<
       );
       const lookAhead = forward.clone().multiplyScalar(2.5);
       camera.lookAt(cameraTarget.add(lookAhead));
+      shadowUpdateClock += delta;
+      if (
+        renderer.shadowMap.enabled &&
+        (shadowUpdateClock >= (current.mode === "playing" ? 0.14 : 0.8) ||
+          renderer.shadowMap.needsUpdate)
+      ) {
+        renderer.shadowMap.needsUpdate = true;
+        shadowUpdateClock = 0;
+      }
       renderer.render(scene, camera);
     };
     animate();
