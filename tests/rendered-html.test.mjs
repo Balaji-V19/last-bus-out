@@ -29,7 +29,7 @@ test("server-renders the Last Bus Out 3D survival experience", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Last Bus Out: Road to Haven<\/title>/i);
-  assert.match(html, /three-dimensional survival build/i);
+  assert.match(html, /three-dimensional survival game/i);
   assert.match(html, /Begin the escape/);
   assert.match(html, /WASD/);
   assert.match(html, /game-viewport-3d/);

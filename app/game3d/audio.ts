@@ -213,7 +213,9 @@ export class SurvivalAudio {
       return;
     }
 
-    const audio = new Audio("/audio/dissonant-horror-loop.ogg");
+    const audio = new Audio(
+      new URL("audio/dissonant-horror-loop.ogg", document.baseURI).toString(),
+    );
     audio.loop = true;
     audio.preload = "auto";
     audio.volume = targetVolume;

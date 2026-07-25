@@ -838,7 +838,7 @@ export function LastBusOutGame() {
       {mode === "menu" && (
         <section className="menu-screen">
           <div className="menu-content">
-            <div className="eyebrow">Local three-dimensional survival build</div>
+            <div className="eyebrow">Original three-dimensional survival game</div>
             <h1 className="game-title">
               Last Bus Out
               <span>Road to Haven</span>
