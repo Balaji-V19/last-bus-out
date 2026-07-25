@@ -9,7 +9,6 @@ import {
 import * as THREE from "three";
 import {
   createAnimatedCharacter,
-  createDetailedStaticModel,
   disposeAnimatedCharacter,
   setAnimatedEquipment,
   setCharacterHitFlash,
@@ -313,23 +312,6 @@ export const GameViewport3D = forwardRef<
         flickerLights.push(object);
       }
     });
-    const axePickup = world.interactions.find(
-      (interaction) => interaction.id === "axe",
-    );
-    if (axePickup) {
-      void createDetailedStaticModel("/models/fire-axe.gltf", 0.82).then(
-        (detailedAxe) => {
-          if (disposed) return;
-          const prototype = axePickup.object.children.find(
-            (child) => !child.userData.marker,
-          );
-          if (prototype) axePickup.object.remove(prototype);
-          detailedAxe.position.y = 0.54;
-          detailedAxe.rotation.z = -0.18;
-          axePickup.object.add(detailedAxe);
-        },
-      );
-    }
 
     const playerRoot = new THREE.Group();
     playerRoot.position.copy(world.start);

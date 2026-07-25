@@ -1,15 +1,11 @@
-# Third-party 3D assets
+# Original 3D assets
 
-Selected animated character and weapon models in this directory come from the
-Quaternius Zombie Apocalypse Kit.
+The playable rescue officer, paramedic companion, walker, runner, heavy
+infected, carried axe, and pistol are original procedural models created for
+Last Bus Out. Their anatomy, clothing layers, equipment, materials, joint rigs,
+and animations are generated locally by `app/game3d/animatedCharacter.ts`.
 
-- Creator: Quaternius
-- Source: https://quaternius.com/packs/zombieapocalypsekit.html
-- License: CC0 1.0 Universal / public domain
-- License URL: https://creativecommons.org/publicdomain/zero/1.0/
-
-The models are stored locally so the game does not depend on a remote asset
-server at runtime.
+The game no longer loads third-party character, animation, or weapon models.
 
 ## Audio
 
