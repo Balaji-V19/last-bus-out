@@ -192,6 +192,7 @@ export function LastBusOutGame() {
   const [minimapCanvas, setMinimapCanvas] = useState<HTMLCanvasElement | null>(
     null,
   );
+  const [bloodCanvas, setBloodCanvas] = useState<HTMLCanvasElement | null>(null);
   const [toast, setToast] = useState("");
   const [prompt, setPrompt] = useState<{ id: string; label: string } | null>(null);
   const [fuelProgress, setFuelProgress] = useState(0);
@@ -632,6 +633,15 @@ export function LastBusOutGame() {
     );
   }, [loadChapter, medicine, saveGame]);
 
+  // Duck the score as something closes. Fully out of the way by four metres so
+  // that at the moment it matters the player is hearing the creature and
+  // nothing else; back to full past twenty. Applied directly to the audio rig
+  // rather than through state, so it does not re-render the HUD.
+  const handleThreatProximity = useCallback((distance: number) => {
+    const duck = clamp((20 - distance) / 16, 0, 1);
+    audioRef.current?.setMusicDuck(duck);
+  }, []);
+
   // Something is coming. The banner is deliberately text-only and short-lived;
   // the audio telegraph carries the direction, this only carries the fact.
   const handleWaveWarning = useCallback((wave: number, _seconds: number) => {
@@ -819,6 +829,7 @@ export function LastBusOutGame() {
             inventory={inventory}
             pov={pov}
             minimapCanvas={minimapCanvas}
+            bloodCanvas={bloodCanvas}
             resetToken={resetToken}
             onReady={() => setWorldReady(true)}
             onPovChange={setPov}
@@ -840,6 +851,7 @@ export function LastBusOutGame() {
             onSurvivalProgress={handleSurvivalProgress}
             onFearChange={setDread}
             onWaveWarning={handleWaveWarning}
+            onThreatProximity={handleThreatProximity}
             onSound={playSound}
           />
         </Suspense>
@@ -850,6 +862,12 @@ export function LastBusOutGame() {
       <div
         className={`terror-pulse ${dread > 68 ? "active" : ""}`}
         style={{ opacity: Math.max(0, (dread - 38) / 115) }}
+      />
+      <canvas
+        ref={setBloodCanvas}
+        className="view-blood"
+        style={{ opacity: 0 }}
+        aria-hidden="true"
       />
       {damagePulse > 0 && <div key={damagePulse} className="damage-flash" />}
       {waveAlert > 0 && <div key={`wave-${waveAlert}`} className="wave-alert" />}

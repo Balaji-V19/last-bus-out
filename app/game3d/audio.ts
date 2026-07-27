@@ -73,6 +73,28 @@ export class SurvivalAudio {
   private enabled = true;
   private lastPlayed = new Map<GameSoundEvent, number>();
   private music: MusicRig | null = null;
+  /** Base music level before ducking, so duck changes do not lose the target. */
+  private musicBaseVolume = 0.14;
+  /** 0 = score at full level, 1 = score pulled almost entirely out. */
+  private musicDuck = 0;
+
+  /**
+   * Pull the score down when something is close. The music is a bed for
+   * tension; once a creature is actually on you it should be the only thing
+   * you can hear, so this ducks hard rather than politely.
+   */
+  setMusicDuck(amount: number) {
+    this.musicDuck = clamp(amount, 0, 1);
+    this.applyMusicVolume();
+  }
+
+  private applyMusicVolume() {
+    if (!this.music) return;
+    // Squared so the bed gets out of the way early rather than lingering at
+    // half level through the part that matters.
+    const ducked = this.musicBaseVolume * (1 - this.musicDuck) ** 2;
+    this.music.audio.volume = clamp(ducked, 0, 1);
+  }
 
   setEnabled(enabled: boolean) {
     this.enabled = enabled;
@@ -226,10 +248,11 @@ export class SurvivalAudio {
     // of inaudibility. Held well below the effects bus until the music is
     // routed through the AudioContext and can be ducked properly.
     const targetVolume = 0.1 + normalizedIntensity * 0.08;
+    this.musicBaseVolume = targetVolume;
     const playbackRate = 0.985 + normalizedIntensity * 0.025;
     if (this.music) {
       this.music.chapter = chapter;
-      this.music.audio.volume = targetVolume;
+      this.applyMusicVolume();
       this.music.audio.playbackRate = playbackRate;
       this.music.audio.muted = false;
       if (this.music.audio.paused) {
@@ -245,9 +268,9 @@ export class SurvivalAudio {
     );
     audio.loop = true;
     audio.preload = "auto";
-    audio.volume = targetVolume;
     audio.playbackRate = playbackRate;
     this.music = { chapter, audio };
+    this.applyMusicVolume();
     void audio.play().catch(() => {
       // Browsers may wait for the first gameplay input before starting media.
     });

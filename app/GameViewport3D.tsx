@@ -47,6 +47,8 @@ type GameViewportProps = {
   pov: PointOfView;
   /** Canvas the minimap draws into. Drawn to directly, never through state. */
   minimapCanvas: HTMLCanvasElement | null;
+  /** Full-screen canvas for blood thrown onto the view when the player is hit. */
+  bloodCanvas: HTMLCanvasElement | null;
   resetToken: number;
   onReady: () => void;
   onPovChange: (pov: PointOfView) => void;
@@ -70,6 +72,8 @@ type GameViewportProps = {
   onFearChange: (value: number) => void;
   /** Fired when a wave or scripted encounter is coming, before anything spawns. */
   onWaveWarning: (wave: number, seconds: number) => void;
+  /** Distance to the nearest living enemy, or Infinity. Throttled. */
+  onThreatProximity: (distance: number) => void;
   onSound: (event: GameSoundEvent, options?: GameSoundOptions) => void;
 };
 
@@ -671,6 +675,68 @@ export const GameViewport3D = forwardRef<
     };
 
     buildMinimapBase();
+
+    // ---- blood on the view --------------------------------------------------
+    // In first person the camera sits where the player's head is, so world-space
+    // blood spawned at chest height is behind the near plane and effectively
+    // invisible. Being hit now also throws blood onto the view itself, which is
+    // the only way the impact reads from inside the player's own eyes.
+    let bloodOverlayAlpha = 0;
+
+    const splashViewBlood = (strength: number, lateralBias: number) => {
+      const canvas = propsRef.current.bloodCanvas;
+      if (!canvas) return;
+      const width = 640;
+      const height = 360;
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.clearRect(0, 0, width, height);
+
+      // Biased toward the side the blow came from, heavier toward the edges so
+      // the centre of the view stays readable enough to keep fighting or run.
+      const originX = width * (0.5 + lateralBias * 0.32);
+      const originY = height * 0.46;
+      const drops = Math.round(16 + strength * 26);
+      for (let index = 0; index < drops; index += 1) {
+        const angle = Math.random() * Math.PI * 2;
+        const spread = Math.pow(Math.random(), 0.55);
+        const radius = spread * width * (0.16 + strength * 0.4);
+        const x = originX + Math.cos(angle) * radius;
+        const y = originY + Math.sin(angle) * radius * 0.62;
+        const size = (3 + Math.random() * 16) * (0.5 + strength * 0.8);
+        const alpha = 0.3 + Math.random() * 0.5;
+        const gradient = context.createRadialGradient(x, y, 0, x, y, size);
+        gradient.addColorStop(0, `rgba(96, 6, 4, ${alpha})`);
+        gradient.addColorStop(0.62, `rgba(62, 3, 2, ${alpha * 0.72})`);
+        gradient.addColorStop(1, "rgba(38, 2, 1, 0)");
+        context.fillStyle = gradient;
+        context.beginPath();
+        // Slightly elliptical and rotated, so drops do not read as circles.
+        context.ellipse(
+          x,
+          y,
+          size,
+          size * (0.55 + Math.random() * 0.6),
+          Math.random() * Math.PI,
+          0,
+          Math.PI * 2,
+        );
+        context.fill();
+
+        // Occasional run streaking down from a heavier drop.
+        if (size > 11 && Math.random() < 0.45) {
+          const runLength = size * (1.6 + Math.random() * 3.4);
+          const runGradient = context.createLinearGradient(x, y, x, y + runLength);
+          runGradient.addColorStop(0, `rgba(74, 4, 3, ${alpha * 0.7})`);
+          runGradient.addColorStop(1, "rgba(48, 2, 1, 0)");
+          context.fillStyle = runGradient;
+          context.fillRect(x - size * 0.16, y, size * 0.32, runLength);
+        }
+      }
+      bloodOverlayAlpha = Math.min(1, 0.55 + strength * 0.5);
+    };
 
     const panScratch = new THREE.Vector3();
     const panFor = (position: THREE.Vector3, limit = 0.92) => {
@@ -1902,16 +1968,33 @@ export const GameViewport3D = forwardRef<
               .sub(enemy.root.position)
               .normalize();
             kickYaw += attackDirectionVector.x > 0 ? -0.03 : 0.03;
+            const heavyHit = enemy.character?.style === "heavy";
+            const runnerHit = enemy.character?.style === "runner";
+            // Spawn the world-space spray forward of the eye in first person so
+            // it arcs across the view instead of erupting behind the near plane.
+            if (current.pov === "first") {
+              bloodOrigin
+                .copy(playerRoot.position)
+                .setY(playerRoot.position.y + 1.42)
+                .addScaledVector(forward, 0.55);
+            } else {
+              bloodOrigin
+                .copy(playerRoot.position)
+                .setY(playerRoot.position.y + 1.14);
+            }
             spawnBlood(
-              bloodOrigin.copy(playerRoot.position).setY(
-                playerRoot.position.y + 1.14,
-              ),
+              bloodOrigin,
               attackDirectionVector,
-              enemy.character?.style === "runner"
-                ? 15
-                : enemy.character?.style === "heavy"
-                  ? 20
-                  : 10,
+              runnerHit ? 15 : heavyHit ? 20 : 10,
+            );
+            splashViewBlood(
+              heavyHit ? 1 : runnerHit ? 0.72 : 0.5,
+              THREE.MathUtils.clamp(
+                attackDirectionVector.x * Math.cos(cameraYaw) -
+                  attackDirectionVector.z * Math.sin(cameraYaw),
+                -1,
+                1,
+              ),
             );
             current.onSound("zombie-attack", {
               intensity:
@@ -2369,6 +2452,14 @@ export const GameViewport3D = forwardRef<
           }
         }
 
+        // Blood on the view dries off rather than snapping away. Opacity is
+        // driven on the element so the canvas itself is only redrawn on a hit.
+        if (bloodOverlayAlpha > 0) {
+          bloodOverlayAlpha = Math.max(0, bloodOverlayAlpha - delta * 0.2);
+          const canvas = current.bloodCanvas;
+          if (canvas) canvas.style.opacity = `${bloodOverlayAlpha.toFixed(3)}`;
+        }
+
         // 10 Hz is plenty for a 132 px map and keeps it off the render budget.
         minimapClock += delta;
         if (minimapClock >= 0.1) {
@@ -2379,6 +2470,17 @@ export const GameViewport3D = forwardRef<
         progressReportClock += delta;
         const reportProgress = progressReportClock >= 0.12;
         if (reportProgress) progressReportClock = 0;
+
+        if (reportProgress) {
+          let nearestThreat = Infinity;
+          for (const enemy of livingEnemies) {
+            nearestThreat = Math.min(
+              nearestThreat,
+              enemy.root.position.distanceTo(playerRoot.position),
+            );
+          }
+          current.onThreatProximity(nearestThreat);
+        }
 
         if (current.chapter === "survival") {
           survivalTime += delta;

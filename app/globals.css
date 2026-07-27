@@ -101,6 +101,20 @@ button {
   animation: damage-impact 520ms ease-out forwards;
 }
 
+/* Blood thrown onto the view when the player is struck. Stretched over the
+   whole viewport and multiplied into the scene so it reads as fluid on the
+   lens rather than a red tint. Opacity is driven from the render loop. */
+.view-blood {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  transition: none;
+}
+
 /* Wave telegraph. Amber rather than red so it does not read as damage taken,
    and slow enough to feel like a building alarm rather than an impact. */
 .wave-alert {
