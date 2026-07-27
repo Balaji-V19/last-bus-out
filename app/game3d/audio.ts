@@ -106,16 +106,28 @@ const VOICE_VARIANTS = 4;
  * game never falls silent over a missing asset.
  */
 const VOICE_SAMPLES: Partial<Record<VoiceKind | "impact", readonly string[]>> = {
-  growl: ["growl-a", "growl-b", "growl-c"],
-  alert: ["growl-a", "growl-c"],
-  scream: ["scream-a", "scream-b", "scream-c", "scream-d"],
-  pain: ["hurt-a", "hurt-b", "hurt-c"],
+  growl: ["creatures/growl-a", "creatures/growl-b", "creatures/growl-c"],
+  alert: ["creatures/growl-a", "creatures/growl-c"],
+  scream: [
+    "creatures/scream-a",
+    "creatures/scream-b",
+    "creatures/scream-c",
+    "creatures/scream-d",
+  ],
+  pain: ["creatures/hurt-a", "creatures/hurt-b", "creatures/hurt-c"],
 };
 
 /** Recorded hits used by specific events rather than by a voice kind. */
 const EVENT_SAMPLES: Partial<Record<GameSoundEvent, readonly string[]>> = {
-  "zombie-attack": ["attack-a", "attack-b", "attack-c"],
-  "zombie-death": ["death-a", "death-b"],
+  "zombie-attack": ["creatures/attack-a", "creatures/attack-b", "creatures/attack-c"],
+  "zombie-death": ["creatures/death-a", "creatures/death-b"],
+  // Weapon recordings are optional. Each of these falls back to its
+  // synthesised version if the file is absent, so the slots can be filled in
+  // later without touching code. See docs/AUDIO_SOURCES.md for the exact
+  // CC0 items these expect.
+  "axe-swing": ["weapons/axe-swing-a", "weapons/axe-swing-b"],
+  "axe-flesh": ["weapons/axe-flesh-a", "weapons/axe-flesh-b", "weapons/axe-flesh-c"],
+  "axe-wall": ["weapons/axe-wall-a", "weapons/axe-wall-b"],
 };
 
 export class SurvivalAudio {
@@ -199,10 +211,7 @@ export class SurvivalAudio {
   private loadSample(context: AudioContext, name: string) {
     if (this.sampleBank.has(name)) return;
     if (this.sampleLoads.has(name)) return;
-    const url = new URL(
-      `audio/creatures/${name}.ogg`,
-      document.baseURI,
-    ).toString();
+    const url = new URL(`audio/${name}.ogg`, document.baseURI).toString();
     const load = fetch(url)
       .then((response) => {
         if (!response.ok) throw new Error(`${response.status}`);

@@ -27,6 +27,7 @@ import {
   disposeWorld,
   flowDirection,
   gridAllows,
+  gridSees,
   type BuiltWorld,
   type EquipmentKind,
   type GameChapter,
@@ -980,6 +981,26 @@ export const GameViewport3D = forwardRef<
      * back toward the room centre until it lands on walkable floor, so an
      * encounter can never place an enemy inside a wall or a prop.
      */
+    /**
+     * True when the player could actually watch something appear at this spot:
+     * roughly in front of them, close enough to resolve, and not behind a wall.
+     * Nothing should ever pop into existence inside the player's view — an
+     * arrival is only frightening if it was already there when they turned.
+     */
+    const isVisibleToPlayer = (x: number, z: number) => {
+      const dx = x - playerRoot.position.x;
+      const dz = z - playerRoot.position.z;
+      const range = Math.hypot(dx, dz);
+      if (range > 34) return false;
+      if (range < 0.001) return true;
+      const facing =
+        (-Math.sin(cameraYaw) * dx + -Math.cos(cameraYaw) * dz) / range;
+      // cos(50 deg): a little wider than the actual frustum, for safety.
+      if (facing < 0.64) return false;
+      if (!world.grid) return true;
+      return gridSees(world.grid, playerRoot.position.x, playerRoot.position.z, x, z);
+    };
+
     const spawnEnemyInRoom = (
       style: "walker" | "runner" | "heavy",
       room: string,
@@ -988,14 +1009,26 @@ export const GameViewport3D = forwardRef<
     ) => {
       const anchor = world.spawnPoints?.find((entry) => entry.room === room);
       if (!anchor) return;
+      const candidates: Array<[number, number]> = [];
       for (let attempt = 0; attempt <= 4; attempt += 1) {
         const scale = 1 - attempt * 0.25;
-        const x = anchor.position.x + offsetX * scale;
-        const z = anchor.position.z + offsetZ * scale;
-        if (canOccupy(world, x, z, 0.44)) {
-          spawnEnemy(style, x, z);
-          return;
-        }
+        candidates.push([
+          anchor.position.x + offsetX * scale,
+          anchor.position.z + offsetZ * scale,
+        ]);
+      }
+      // Prefer somewhere out of sight; fall back to any legal spot rather than
+      // failing to spawn and leaving an encounter that can never be cleared.
+      for (const [x, z] of candidates) {
+        if (!canOccupy(world, x, z, 0.44)) continue;
+        if (isVisibleToPlayer(x, z)) continue;
+        spawnEnemy(style, x, z);
+        return;
+      }
+      for (const [x, z] of candidates) {
+        if (!canOccupy(world, x, z, 0.44)) continue;
+        spawnEnemy(style, x, z);
+        return;
       }
     };
 

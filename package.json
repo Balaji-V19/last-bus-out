@@ -13,6 +13,7 @@
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "validate:characters": "node scripts/validate-character-gait.mjs",
     "validate:floors": "node scripts/validate-floor-plans.mjs",
+    "audio:prepare": "node scripts/prepare-audio.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
