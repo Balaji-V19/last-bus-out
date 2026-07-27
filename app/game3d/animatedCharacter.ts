@@ -87,6 +87,250 @@ type CharacterMaterials = {
 
 const textureCache = new Map<string, THREE.CanvasTexture>();
 
+/**
+ * Skin and clothing maps for the infected.
+ *
+ * The bodies already ship as ordinary clothed people — shirt, trousers, boots
+ * — which is exactly the reference: someone who was a person that morning.
+ * What was missing was any surface treatment, because the models carry no
+ * textures at all and every material was a flat colour. Flat colour is why they
+ * read as mannequins.
+ *
+ * These maps paint onto the UV strip the body mesh already has, which is laid
+ * out as four tiles: head, torso and limbs, hands, feet. That means each region
+ * can be treated differently — a face can be gaunt around the eyes while the
+ * forearms are merely grimy — from one texture and one draw call.
+ *
+ * All of it is generated, so nothing here can glitch and nothing adds download
+ * weight.
+ */
+const SKIN_TILES = 4;
+
+function infectedSkinTexture(seed: number) {
+  const key = "infected-skin";
+  const cached = textureCache.get(key);
+  if (cached) return cached;
+
+  // 384 rather than 512 per tile: at torch range the difference is invisible
+  // and it nearly halves the memory a shared map costs.
+  const tile = 384;
+  const canvas = document.createElement("canvas");
+  canvas.width = tile * SKIN_TILES;
+  canvas.height = tile;
+  const context = canvas.getContext("2d")!;
+  const random = seededNoise(seed);
+
+  // Corpse pallor: drained and slightly cool, not green. Green-tinted skin
+  // reads as a comic-book monster; real post-mortem skin is grey-white with
+  // the colour pooling into blotches.
+  context.fillStyle = "#b4afa4";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const tileAt = (index: number) => index * tile;
+
+  // Mottling across every tile: lividity pools where blood settled.
+  for (let index = 0; index < SKIN_TILES; index += 1) {
+    const originX = tileAt(index);
+    for (let blotch = 0; blotch < 130; blotch += 1) {
+      const x = originX + random() * tile;
+      const y = random() * tile;
+      const radius = 12 + random() * 64;
+      const shade = random();
+      const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+      const tint =
+        shade > 0.72
+          ? "120, 108, 104"
+          : shade > 0.4
+            ? "104, 102, 96"
+            : "142, 136, 126";
+      gradient.addColorStop(0, `rgba(${tint}, ${0.1 + random() * 0.24})`);
+      gradient.addColorStop(1, `rgba(${tint}, 0)`);
+      context.fillStyle = gradient;
+      context.beginPath();
+      context.arc(x, y, radius, 0, Math.PI * 2);
+      context.fill();
+    }
+  }
+
+  // Head tile: sink the eye sockets and darken the mouth. Deep shadow around
+  // the eyes is the single strongest cue in every reference — a skull reading
+  // through the face.
+  const head = tileAt(0);
+  for (const [cx, cy, rx, ry, alpha] of [
+    [0.32, 0.44, 0.13, 0.1, 0.62],
+    [0.68, 0.44, 0.13, 0.1, 0.62],
+    [0.5, 0.72, 0.16, 0.09, 0.4],
+  ] as const) {
+    const gradient = context.createRadialGradient(
+      head + cx * tile,
+      cy * tile,
+      0,
+      head + cx * tile,
+      cy * tile,
+      Math.max(rx, ry) * tile,
+    );
+    gradient.addColorStop(0, `rgba(26, 20, 20, ${alpha})`);
+    gradient.addColorStop(0.6, `rgba(42, 34, 32, ${alpha * 0.5})`);
+    gradient.addColorStop(1, "rgba(60, 52, 48, 0)");
+    context.save();
+    context.translate(head + cx * tile, cy * tile);
+    context.scale(1, ry / rx);
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(0, 0, rx * tile, 0, Math.PI * 2);
+    context.fill();
+    context.restore();
+  }
+  // Hollow the cheeks and temples so the skull reads under the skin.
+  for (const cx of [0.2, 0.8, 0.28, 0.72]) {
+    const gradient = context.createRadialGradient(
+      head + cx * tile,
+      0.58 * tile,
+      0,
+      head + cx * tile,
+      0.58 * tile,
+      0.14 * tile,
+    );
+    gradient.addColorStop(0, "rgba(78, 70, 66, 0.36)");
+    gradient.addColorStop(1, "rgba(78, 70, 66, 0)");
+    context.fillStyle = gradient;
+    context.fillRect(head, 0, tile, tile);
+  }
+
+  // Veins, drawn as branching dark lines rather than as a noise field. Real
+  // marbling follows the venous tree, and a branch reads as anatomy where
+  // scattered noise reads as dirt.
+  context.lineCap = "round";
+  for (let index = 0; index < SKIN_TILES; index += 1) {
+    const originX = tileAt(index);
+    const branches = index === 0 ? 26 : 40;
+    for (let branch = 0; branch < branches; branch += 1) {
+      let x = originX + random() * tile;
+      let y = random() * tile;
+      let angle = random() * Math.PI * 2;
+      context.strokeStyle = `rgba(58, 62, 54, ${0.16 + random() * 0.2})`;
+      context.lineWidth = 1 + random() * 1.6;
+      context.beginPath();
+      context.moveTo(x, y);
+      const segments = 4 + Math.floor(random() * 5);
+      for (let segment = 0; segment < segments; segment += 1) {
+        angle += (random() - 0.5) * 1.1;
+        const length = 6 + random() * 20;
+        x += Math.cos(angle) * length;
+        y += Math.sin(angle) * length;
+        context.lineTo(x, y);
+      }
+      context.stroke();
+    }
+  }
+
+  // Blood: dark and nearly black in the body, red only at the thin margin,
+  // running downward. Bright red reads as paint.
+  for (let index = 0; index < SKIN_TILES; index += 1) {
+    const originX = tileAt(index);
+    const smears = index === 0 ? 8 : 12;
+    for (let smear = 0; smear < smears; smear += 1) {
+      const x = originX + random() * tile;
+      const y = random() * tile * 0.7;
+      const width = 6 + random() * 26;
+      const length = 30 + random() * 150;
+      const gradient = context.createLinearGradient(x, y, x, y + length);
+      gradient.addColorStop(0, `rgba(46, 8, 6, ${0.5 + random() * 0.35})`);
+      gradient.addColorStop(0.35, "rgba(62, 12, 9, 0.44)");
+      gradient.addColorStop(1, "rgba(38, 10, 8, 0)");
+      context.fillStyle = gradient;
+      context.beginPath();
+      context.ellipse(x, y, width * 0.6, width * 0.5, 0, 0, Math.PI * 2);
+      context.fill();
+      context.fillRect(x - width * 0.18, y, width * 0.36, length);
+    }
+  }
+
+  // Grime settling into the low points.
+  for (let index = 0; index < 2200; index += 1) {
+    context.fillStyle = `rgba(58, 52, 44, ${0.05 + random() * 0.16})`;
+    const size = random() * 5 + 1;
+    context.fillRect(random() * canvas.width, random() * tile, size, size);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  // The body's UVs run 0..4 across the strip, so a quarter repeat lands each
+  // tile on the region it was painted for.
+  texture.repeat.set(1 / SKIN_TILES, 1);
+  texture.anisotropy = 2;
+  textureCache.set(key, texture);
+  return texture;
+}
+
+/** Grime, sweat and blood over whatever colour the garment already is. */
+function infectedClothTexture(seed: number) {
+  const key = "infected-cloth";
+  const cached = textureCache.get(key);
+  if (cached) return cached;
+
+  // 384 rather than 512 per tile: at torch range the difference is invisible
+  // and it nearly halves the memory a shared map costs.
+  const tile = 384;
+  const canvas = document.createElement("canvas");
+  canvas.width = tile * SKIN_TILES;
+  canvas.height = tile;
+  const context = canvas.getContext("2d")!;
+  const random = seededNoise(seed + 991);
+
+  context.fillStyle = "#9a968c";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Worn patches and dirt, heavier toward the lower half of each tile where a
+  // garment actually collects it.
+  for (let index = 0; index < 320; index += 1) {
+    const x = random() * canvas.width;
+    const y = random() * tile;
+    const radius = 18 + random() * 90;
+    const weight = 0.06 + random() * 0.2 + (y / tile) * 0.14;
+    const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, `rgba(70, 64, 54, ${weight})`);
+    gradient.addColorStop(1, "rgba(70, 64, 54, 0)");
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  // Dried blood soaked into the fabric: broader and flatter than on skin,
+  // because cloth is porous and wicks rather than beading.
+  for (let index = 0; index < 26; index += 1) {
+    const x = random() * canvas.width;
+    const y = random() * tile;
+    const radius = 20 + random() * 70;
+    const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, `rgba(44, 12, 9, ${0.34 + random() * 0.3})`);
+    gradient.addColorStop(0.5, "rgba(52, 16, 12, 0.22)");
+    gradient.addColorStop(1, "rgba(40, 12, 10, 0)");
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  // Weave, so cloth does not read as painted plastic under a torch.
+  for (let index = 0; index < 3000; index += 1) {
+    context.fillStyle = `rgba(120, 114, 104, ${0.04 + random() * 0.1})`;
+    context.fillRect(random() * canvas.width, random() * tile, 2 + random() * 3, 1);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(1 / SKIN_TILES, 1);
+  texture.anisotropy = 2;
+  textureCache.set(key, texture);
+  return texture;
+}
+
 function seededNoise(seed: number) {
   let value = seed >>> 0;
   return () => {
@@ -1730,31 +1974,29 @@ async function createLicensedCharacter(
     initialBounds.getSize(new THREE.Vector3()).y,
     0.01,
   );
-  assetScene.scale.setScalar(height / naturalHeight);
+  // Every scale adjustment must happen BEFORE the bounds are measured and the
+  // model is dropped onto the floor. Applying them afterwards — as an earlier
+  // version did — left the recentring stale, so the fitted height was wrong and
+  // the feet no longer sat at y = 0: the actor floated above the floor or sank
+  // through it.
+  const infectedStyle =
+    style === "walker" || style === "runner" || style === "heavy";
+  // A few per cent of per-actor variation, so a group is not visibly clones.
+  const spread = infectedStyle ? 0.96 + Math.random() * 0.08 : 1;
+  assetScene.scale.setScalar((height / naturalHeight) * spread);
+  if (style === "runner") {
+    // Gaunt: narrower than an ordinary person as well as shorter.
+    assetScene.scale.x *= 0.9;
+    assetScene.scale.z *= 0.9;
+  } else if (style === "heavy") {
+    assetScene.scale.x *= 1.14;
+    assetScene.scale.z *= 1.1;
+  }
+
   const scaledBounds = new THREE.Box3().setFromObject(assetScene);
   const center = scaledBounds.getCenter(new THREE.Vector3());
   assetScene.position.set(-center.x, -scaledBounds.min.y, -center.z);
   assetScene.rotation.y = Math.PI;
-
-  if (style === "runner") {
-    // Narrower than a person as well as shorter. A thing that is smaller and
-    // faster is more alarming than a scaled-down copy of the same body.
-    assetScene.scale.x *= 0.88;
-    assetScene.scale.z *= 0.86;
-  } else if (style === "heavy") {
-    assetScene.scale.x *= 1.2;
-    assetScene.scale.z *= 1.14;
-  } else if (style === "walker") {
-    assetScene.scale.x *= 0.97;
-    assetScene.scale.z *= 0.95;
-  }
-
-  // A few per cent of per-actor variation in overall size. Ratio distortions
-  // carry the species read; this only stops a group looking like copies.
-  if (style === "walker" || style === "runner" || style === "heavy") {
-    const spread = 0.94 + Math.random() * 0.12;
-    assetScene.scale.multiplyScalar(spread);
-  }
 
   const flashMaterialSet = new Set<THREE.MeshStandardMaterial>();
   const shadowNodes: THREE.Mesh[] = [];
@@ -1795,40 +2037,41 @@ async function createLicensedCharacter(
         const materialName = material.name.toLowerCase();
         const isSkin = materialName.includes("skin");
         if (style === "walker" || style === "runner" || style === "heavy") {
-          // Green-black, not purple. Early decomposition presents as green
-          // discolouration with the superficial veins marbling green-black
-          // over it, and that reads far more diseased than a bruise palette.
-          const necrosis =
-            style === "heavy"
-              ? new THREE.Color(0x46503c)
-              : style === "runner"
-                ? new THREE.Color(0x53553f)
-                : new THREE.Color(0x5a5c46);
-          material.color.lerp(necrosis, isSkin ? 0.5 : 0.26);
-
+          // Corpse pallor rather than a colour cast: drained grey-white, with
+          // the variation carried by the map instead of by a flat tint. Every
+          // reference is a person gone grey, not a person gone green.
           if (isSkin) {
-            // Wet, not merely dark. A darkened surface on its own reads as
-            // dirty; it is the sharp highlight that converts darkening into
-            // wetness, so both are needed. Skin is non-porous and barely
-            // darkens when wet — it mostly just gets glossier.
-            material.roughness = 0.38;
+            material.map = infectedSkinTexture(4177);
+            // Pallor varies slightly per variant without needing its own map.
+            const pallor =
+              style === "heavy" ? 0.9 : style === "runner" ? 0.96 : 1;
+            material.color.setRGB(pallor, pallor * 0.995, pallor * 0.97);
+            material.roughness = 0.52;
             material.metalness = 0;
             if (material instanceof THREE.MeshPhysicalMaterial) {
-              // Blood's refractive index, and a light clearcoat for the film
-              // of moisture sitting on top of it.
+              // A thin film of moisture rather than a wet-look coating. Too
+              // much clearcoat turns a corpse into a waxwork.
               material.ior = 1.36;
-              material.clearcoat = 0.42;
-              material.clearcoatRoughness = 0.28;
+              material.clearcoat = 0.22;
+              material.clearcoatRoughness = 0.45;
             }
-            // No emissive on skin. A corpse does not glow, and lifting the
-            // black point flattens exactly the shadow contrast that makes a
-            // sunken face read as sunken.
             material.emissive.setHex(0x000000);
             material.emissiveIntensity = 0;
-          } else {
-            material.roughness = Math.max(material.roughness, 0.86);
+          } else if (
+            materialName.includes("shirt") ||
+            materialName.includes("trouser") ||
+            materialName.includes("boot") ||
+            materialName.includes("blood")
+          ) {
+            // The clothes stay their own colour and simply get filthy, so the
+            // crowd keeps the variety of ordinary people caught mid-day.
+            material.map = infectedClothTexture(613);
+            material.color.multiplyScalar(0.82);
+            material.roughness = Math.max(material.roughness, 0.9);
+            material.metalness = 0;
           }
         }
+
         if (
           (style === "runner" || style === "heavy") &&
           materialName.includes("eye")
@@ -2278,75 +2521,42 @@ function deathPose(character: AnimatedCharacter, delta: number) {
 }
 
 /**
- * Per-bone shaping for the infected.
+ * Small, fixed posture offsets for the infected.
  *
- * Deliberately almost entirely rotation. Bone scale propagates down the
- * hierarchy, so scaling a spine bone scales the arms, neck and head hanging off
- * it; an earlier version scaled two spine bones and then multiplied a pulse
- * onto both, which compounded and inflated the whole upper body. Scale is now
- * used only on leaf bones — hands, feet, jaw — where nothing hangs below.
+ * Deliberately conservative. These are added on top of an animation that is
+ * already moving every bone, so anything large fights the clip and reads as
+ * jitter rather than as posture. Two earlier attempts overreached: one scaled
+ * spine bones, which propagates down the hierarchy and inflated the whole upper
+ * body, and one applied offsets big enough to visibly break the walk cycle.
  *
- * The reference is a decayed person, not a deformed creature. Walkers read as
- * human corpses that are still moving: the wrongness is in posture, slackness
- * and gait rather than in proportion. Everything here is small enough to stay
- * inside that register.
+ * Rotation only, and nothing above about 0.2 radians. Scale is never touched
+ * here: a bone's scale is shared by everything hanging below it, so there is no
+ * safe amount to apply on the spine, and the gain elsewhere is not worth the
+ * risk. The look comes from materials instead, which cannot glitch.
  */
-type BoneShape = {
-  bone: keyof CharacterRig;
-  /** Added to the animated rotation, radians. */
-  rotate?: [number, number, number];
-  /**
-   * Multiplied onto the animated scale. Only safe on bones with no children
-   * that matter — anything on the spine chain inflates everything above it.
-   */
-  leafScale?: [number, number, number];
-};
+type BoneShape = { bone: keyof CharacterRig; rotate: [number, number, number] };
 
 const CREATURE_SHAPES: Record<"walker" | "runner" | "heavy", BoneShape[]> = {
-  // Shambling and slack. Head hangs, jaw sits open, one shoulder dropped, and
-  // the arms trail rather than swing.
   walker: [
-    { bone: "torso", rotate: [0.16, 0, 0.03] },
-    { bone: "chest", rotate: [0.12, 0, -0.05] },
-    { bone: "neck", rotate: [0.26, 0.06, 0.04] },
-    { bone: "head", rotate: [0.1, 0, -0.07] },
-    { bone: "jaw", rotate: [0.34, 0, 0], leafScale: [1, 1.06, 1] },
-    { bone: "leftShoulder", rotate: [0.16, 0, 0.1] },
-    { bone: "rightShoulder", rotate: [0.22, 0, -0.06] },
-    { bone: "leftElbow", rotate: [0.2, 0, 0] },
-    { bone: "rightElbow", rotate: [0.14, 0, 0] },
+    { bone: "torso", rotate: [0.1, 0, 0.02] },
+    { bone: "neck", rotate: [0.16, 0.03, 0.02] },
+    { bone: "jaw", rotate: [0.2, 0, 0] },
+    { bone: "leftShoulder", rotate: [0.1, 0, 0.05] },
+    { bone: "rightShoulder", rotate: [0.13, 0, -0.04] },
   ],
-  // Further gone and further forward: pitched at the waist, head carried low,
-  // arms hanging well in front. Faster, so the posture leads the body.
   runner: [
-    { bone: "torso", rotate: [0.3, 0, -0.04] },
-    { bone: "chest", rotate: [0.2, 0, 0.06] },
-    { bone: "neck", rotate: [0.34, -0.08, 0] },
-    { bone: "head", rotate: [-0.12, 0, 0.05] },
-    { bone: "jaw", rotate: [0.46, 0, 0], leafScale: [1, 1.1, 1] },
-    { bone: "leftShoulder", rotate: [0.42, 0, 0.14] },
-    { bone: "rightShoulder", rotate: [0.4, 0, -0.14] },
-    { bone: "leftElbow", rotate: [0.34, 0, 0] },
-    { bone: "rightElbow", rotate: [0.36, 0, 0] },
-    { bone: "leftWrist", leafScale: [1.06, 1.08, 1.06] },
-    { bone: "rightWrist", leafScale: [1.06, 1.08, 1.06] },
+    { bone: "torso", rotate: [0.17, 0, -0.02] },
+    { bone: "neck", rotate: [0.2, -0.04, 0] },
+    { bone: "jaw", rotate: [0.26, 0, 0] },
+    { bone: "leftShoulder", rotate: [0.2, 0, 0.07] },
+    { bone: "rightShoulder", rotate: [0.19, 0, -0.07] },
   ],
-  // Bloated rather than muscular: swollen extremities and a heavy forward
-  // lean, carried on the model's own wider scale rather than on bone scale.
   heavy: [
-    { bone: "torso", rotate: [0.2, 0, 0.05] },
-    { bone: "chest", rotate: [0.1, 0, -0.04] },
-    { bone: "neck", rotate: [0.3, 0.05, 0] },
-    { bone: "head", rotate: [0.06, 0, -0.05] },
-    { bone: "jaw", rotate: [0.28, 0, 0], leafScale: [1.12, 1.1, 1.08] },
-    { bone: "leftShoulder", rotate: [0.24, 0, 0.16] },
-    { bone: "rightShoulder", rotate: [0.24, 0, -0.16] },
-    { bone: "leftElbow", rotate: [0.22, 0, 0] },
-    { bone: "rightElbow", rotate: [0.22, 0, 0] },
-    { bone: "leftWrist", leafScale: [1.24, 1.2, 1.24] },
-    { bone: "rightWrist", leafScale: [1.24, 1.2, 1.24] },
-    { bone: "leftAnkle", leafScale: [1.16, 1.12, 1.16] },
-    { bone: "rightAnkle", leafScale: [1.16, 1.12, 1.16] },
+    { bone: "torso", rotate: [0.12, 0, 0.03] },
+    { bone: "neck", rotate: [0.18, 0.03, 0] },
+    { bone: "jaw", rotate: [0.16, 0, 0] },
+    { bone: "leftShoulder", rotate: [0.14, 0, 0.09] },
+    { bone: "rightShoulder", rotate: [0.14, 0, -0.09] },
   ],
 };
 
@@ -2363,51 +2573,22 @@ function applyAssetSecondaryPose(
   if (infected) {
     const style = character.style as "walker" | "runner" | "heavy";
 
-    // Reapplied every frame rather than set once at clone time: every clip in
-    // these models animates all 41 bones, so anything written at build time is
-    // overwritten by the mixer on the very next update.
-    //
-    // Rotations are additive and cannot accumulate, because the mixer rewrites
-    // the bone's rotation from the clip first. Scale is only ever applied to
-    // leaf bones, and only as a plain multiply of the freshly written value.
+    // Reapplied each frame because the mixer rewrites every bone from the clip
+    // first. Rotations compose onto that fresh value and cannot accumulate.
     for (const shape of CREATURE_SHAPES[style]) {
       const bone = character.rig[shape.bone];
-      if (shape.rotate) {
-        bone.rotateX(shape.rotate[0]);
-        bone.rotateY(shape.rotate[1]);
-        bone.rotateZ(shape.rotate[2]);
-      }
-      if (shape.leafScale) {
-        bone.scale.set(
-          bone.scale.x * shape.leafScale[0],
-          bone.scale.y * shape.leafScale[1],
-          bone.scale.z * shape.leafScale[2],
-        );
-      }
+      bone.rotateX(shape.rotate[0]);
+      bone.rotateY(shape.rotate[1]);
+      bone.rotateZ(shape.rotate[2]);
     }
 
-    // The shamble. Weight rolls side to side on a slow cycle, and the head
-    // lags behind the chest rather than tracking it — dead weight on a slack
-    // neck, which is most of what makes a walker read as a corpse in motion.
+    // A slow head lag, so the head trails the body rather than tracking it.
+    // Small enough to read as dead weight on a slack neck rather than as a
+    // wobble fighting the animation.
     const moving = state === "walk" || state === "run";
-    const pace = style === "runner" ? 3.4 : style === "heavy" ? 1.1 : 1.7;
-    const roll = Math.sin(character.elapsed * pace + character.twitchSeed);
-    const lag = Math.sin(
-      character.elapsed * pace - 0.9 + character.twitchSeed,
-    );
-    character.rig.chest.rotateZ(roll * (moving ? 0.06 : 0.02));
-    character.rig.torso.rotateZ(roll * (moving ? 0.045 : 0.015));
-    character.rig.head.rotateZ(lag * (moving ? 0.11 : 0.05));
-    character.rig.head.rotateX(lag * 0.05);
-
-    // An occasional dry, palsied head tic. Brief and infrequent, so it stays a
-    // detail the player catches rather than a constant wobble.
-    const ticPhase = character.elapsed * 0.31 + character.twitchSeed;
-    const ticWindow = ticPhase - Math.floor(ticPhase);
-    if (ticWindow < 0.06) {
-      const snap = 1 - ticWindow / 0.06;
-      character.rig.head.rotateY(snap * snap * character.twitchDirection * 0.16);
-    }
+    const pace = style === "runner" ? 3.2 : style === "heavy" ? 1.1 : 1.6;
+    const lag = Math.sin(character.elapsed * pace - 0.8 + character.twitchSeed);
+    character.rig.head.rotateZ(lag * (moving ? 0.06 : 0.03));
     return;
   }
 
