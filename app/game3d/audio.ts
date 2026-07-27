@@ -33,13 +33,24 @@ export type GameSoundEvent =
   | "zombie-breath"
   | "zombie-scream"
   | "wave-warning"
-  | "wave-imminent";
+  | "wave-imminent"
+  // The player's own body: breathing under exertion, and weapon-specific
+  // contact so a swing sounds like the thing being swung.
+  | "player-breath"
+  | "axe-swing"
+  | "axe-flesh"
+  | "axe-wall";
 
 export type GameSoundOptions = {
   intensity?: number;
   pan?: number;
   running?: boolean;
-  surface?: "tile" | "asphalt" | "gravel";
+  /**
+   * Floors are built from different materials, and every one of them sounded
+   * like the same ward tile. Basement services is bare screed, research is
+   * sheet vinyl over slab, the annex is steel grating.
+   */
+  surface?: "tile" | "asphalt" | "gravel" | "concrete" | "vinyl" | "grating";
   weapon?: "axe" | "unarmed";
 };
 
@@ -512,21 +523,50 @@ export class SurvivalAudio {
     const intensity = clamp(options.intensity ?? 1, 0.08, 1.25);
 
     if (event === "footstep") {
-      const surface = options.surface ?? "asphalt";
-      const frequency =
-        surface === "tile" ? 1250 : surface === "gravel" ? 720 : 440;
+      const surface = options.surface ?? "tile";
+      // Per-surface contact frequency, body weight and tail. Hard glazed floors
+      // ring high and long; screed is dull and dead; grating rattles.
+      const profile =
+        surface === "tile"
+          ? { hz: 1250, thump: 62, tail: 0, tailHz: 0 }
+          : surface === "concrete"
+            ? { hz: 780, thump: 54, tail: 0, tailHz: 0 }
+            : surface === "vinyl"
+              ? { hz: 560, thump: 58, tail: 0.24, tailHz: 320 }
+              : surface === "grating"
+                ? { hz: 2100, thump: 74, tail: 0.5, tailHz: 3400 }
+                : surface === "gravel"
+                  ? { hz: 720, thump: 58, tail: 0.42, tailHz: 1800 }
+                  : { hz: 440, thump: 62, tail: 0, tailHz: 0 };
       const volume = (options.running ? 0.085 : 0.055) * intensity;
-      this.noiseBurst(0.085, volume, "bandpass", frequency, pan, 0, 170);
+      // A little scatter per step, so a corridor does not become a metronome.
+      const scatter = 1 + (Math.random() * 2 - 1) * 0.12;
+      this.noiseBurst(
+        0.085,
+        volume * scatter,
+        "bandpass",
+        profile.hz * scatter,
+        pan,
+        0,
+        170,
+      );
       this.tone(
-        options.running ? 74 : 62,
+        (options.running ? profile.thump * 1.2 : profile.thump) * scatter,
         0.09,
         volume * 0.55,
         "sine",
         pan,
         42,
       );
-      if (surface === "gravel") {
-        this.noiseBurst(0.14, volume * 0.42, "highpass", 1800, pan, 0.025);
+      if (profile.tail > 0) {
+        this.noiseBurst(
+          0.14,
+          volume * profile.tail,
+          "highpass",
+          profile.tailHz,
+          pan,
+          0.025,
+        );
       }
       return;
     }
@@ -631,6 +671,43 @@ export class SurvivalAudio {
         this.tone(523, 0.24, 0.11 * intensity, "sawtooth", pan, undefined, delay + 0.02);
       }
       this.noiseBurst(0.32, 0.04 * intensity, "highpass", 2400, pan, 0.06);
+      return;
+    }
+
+    // A fire axe is a heavy steel head on a long haft. The swing is a broad
+    // low whoosh that rises as the head accelerates, not the short hiss a
+    // generic melee cue uses.
+    if (event === "axe-swing") {
+      this.noiseBurst(0.34, 0.075 * intensity, "bandpass", 260, pan, 0, 900);
+      this.noiseBurst(0.22, 0.04 * intensity, "highpass", 1400, pan, 0.08);
+      this.tone(150, 0.26, 0.026 * intensity, "sine", pan, 78, 0.04);
+      return;
+    }
+
+    // Burying it in a body: a blunt crack through bone, the wet impact, and a
+    // short metallic ring off the head.
+    if (event === "axe-flesh") {
+      this.playVoice("impact", 0.92 * intensity, pan, 0.09);
+      this.noiseBurst(0.09, 0.11 * intensity, "bandpass", 2100, pan, 0, 420);
+      this.tone(96, 0.2, 0.09 * intensity, "sine", pan, 42, 0.012);
+      this.tone(1730, 0.13, 0.022 * intensity, "triangle", pan, 1180, 0.016);
+      return;
+    }
+
+    // Missing, and hitting tile or steel instead: a bright ring with no wet
+    // component at all, which is what tells the player they whiffed.
+    if (event === "axe-wall") {
+      this.noiseBurst(0.06, 0.1 * intensity, "highpass", 3200, pan);
+      this.tone(2450, 0.34, 0.05 * intensity, "triangle", pan, 1850, 0.008);
+      this.tone(1290, 0.42, 0.036 * intensity, "sine", pan, 940, 0.012);
+      this.tone(184, 0.14, 0.05 * intensity, "sine", pan, 96);
+      return;
+    }
+
+    if (event === "player-breath") {
+      // Reuses the creature breath model at a human tract length and pitch, so
+      // the player sounds like a person out of air rather than a wind sample.
+      this.playVoice("gasp", 0.3 * intensity, 0, 0.14);
       return;
     }
 

@@ -101,6 +101,20 @@ type HealthBar = {
  */
 const ENEMY_AVOID_ANGLES = [0, 0.61, -0.61, 1.22, -1.22, 1.83, -1.83];
 
+/**
+ * What each floor is actually underfoot. Every floor previously reported
+ * "tile", so an hour of play was an hour of the same footstep.
+ */
+const FLOOR_SURFACE: Record<GameChapter, GameSoundOptions["surface"]> = {
+  hospital: "tile",
+  street: "tile",
+  station: "concrete",
+  checkpoint: "vinyl",
+  depot: "vinyl",
+  escape: "concrete",
+  survival: "grating",
+};
+
 type EnemyActor = {
   id: number;
   style: "walker" | "runner" | "heavy";
@@ -529,6 +543,9 @@ export const GameViewport3D = forwardRef<
     let kickPitchVelocity = 0;
     let kickYaw = 0;
     let lastStrideSign = 1;
+    let sprinting = false;
+    let exertion = 0;
+    let exertionClock = 0;
     let dragPointer: { id: number; x: number; y: number } | null = null;
 
     // Stereo placement for a world position, relative to where the player is
@@ -748,6 +765,7 @@ export const GameViewport3D = forwardRef<
     };
     let attack = 0;
     let attackHit = false;
+    let meleeConnected = false;
     let gunRecoil = 0;
     let dodge = 0;
     let heroHitTimer = 0;
@@ -1070,9 +1088,10 @@ export const GameViewport3D = forwardRef<
       attackHit = false;
       stamina = Math.max(0, stamina - 12);
       propsRef.current.onStaminaChange(stamina);
-      propsRef.current.onSound("attack-swing", {
-        weapon: propsRef.current.inventory.axe ? "axe" : "unarmed",
-      });
+      propsRef.current.onSound(
+        propsRef.current.inventory.axe ? "axe-swing" : "attack-swing",
+        { weapon: propsRef.current.inventory.axe ? "axe" : "unarmed" },
+      );
     };
 
     const performShoot = () => {
@@ -1276,12 +1295,22 @@ export const GameViewport3D = forwardRef<
         7.4,
       );
     };
+    // Whether this world has ever actually held the pointer. Changing floor
+    // tears down the old canvas, which releases its lock and fires a change
+    // event that the freshly-mounted listener also receives. Without this the
+    // new world reads that as the player pressing Escape and pauses the game
+    // the instant they take a lift to the next floor.
+    let hasHeldPointerLock = false;
+
     const pointerLockChange = () => {
       if (isPointerLocked()) {
+        hasHeldPointerLock = true;
         renderer.domElement.classList.add("looking");
         return;
       }
       renderer.domElement.classList.remove("looking");
+      if (!hasHeldPointerLock || disposed) return;
+      hasHeldPointerLock = false;
       // Escape releases the lock, and browsers disagree about whether the
       // keydown also reaches us. Driving pause off the lock state instead makes
       // Escape behave identically everywhere.
@@ -1580,8 +1609,20 @@ export const GameViewport3D = forwardRef<
         if (movement.lengthSq() > 0) movement.normalize();
 
         const moving = movement.lengthSq() > 0;
-        const running = Boolean(keys.shift && stamina > 1);
-        let movementSpeed = running ? 3.3 : 1.1;
+        // Sprint needs headroom to start, so it cannot flicker on and off at
+        // the bottom of the bar; once running it holds until the bar empties.
+        if (keys.shift && moving && stamina > (sprinting ? 0.5 : 14)) {
+          sprinting = true;
+        } else if (!keys.shift || stamina <= 0.5 || !moving) {
+          sprinting = false;
+        }
+        const running = sprinting;
+        // Walking was 1.1 m/s, well under a real walking pace, which made the
+        // whole game feel like wading and left sprint reading as "normal speed"
+        // rather than as running. 1.5 walk against 3.9 sprint is a difference
+        // the player can feel. Both stay inside the animation retiming clamp:
+        // the walk clip skates above 1.74 m/s and the run clip below 1.72.
+        let movementSpeed = running ? 3.9 : 1.5;
         if (attack > 0) {
           movementSpeed *= current.inventory.axe ? 0.52 : 0.7;
         }
@@ -1615,8 +1656,10 @@ export const GameViewport3D = forwardRef<
           playerRoot.rotation.y = cameraYaw;
         }
 
-        if (running && moving) stamina = Math.max(0, stamina - delta * 17);
-        else stamina = Math.min(100, stamina + delta * (moving ? 8 : 15));
+        // Roughly seven seconds of sprint from full, recovering faster when
+        // standing still, so running is a resource rather than a toggle.
+        if (running && moving) stamina = Math.max(0, stamina - delta * 14);
+        else stamina = Math.min(100, stamina + delta * (moving ? 9 : 17));
         attack = Math.max(0, attack - delta * 1.72);
         gunRecoil = Math.max(0, gunRecoil - delta * 2.8);
         dodge = Math.max(0, dodge - delta * 2.9);
@@ -1663,7 +1706,7 @@ export const GameViewport3D = forwardRef<
           if (stride < 0 && lastStrideSign >= 0) {
             current.onSound("footstep", {
               running,
-              surface: "tile",
+              surface: FLOOR_SURFACE[current.chapter],
               intensity: running ? 1 : 0.82,
               pan: (Math.random() - 0.5) * 0.16,
             });
@@ -1671,6 +1714,26 @@ export const GameViewport3D = forwardRef<
           lastStrideSign = stride < 0 ? -1 : 1;
         } else {
           lastStrideSign = 1;
+        }
+
+        // The player's own breathing. Running costs air, and a spent player
+        // gasping is both feedback that the sprint bar is empty and a horror
+        // beat in its own right — you can hear yourself failing to get away.
+        exertion = THREE.MathUtils.lerp(
+          exertion,
+          running && moving ? 1 : stamina < 30 ? 0.55 : 0,
+          1 - Math.exp(-delta * 1.4),
+        );
+        if (exertion > 0.16) {
+          exertionClock -= delta;
+          if (exertionClock <= 0) {
+            exertionClock = THREE.MathUtils.lerp(2.4, 0.78, exertion);
+            current.onSound("player-breath", {
+              intensity: 0.35 + exertion * 0.5,
+            });
+          }
+        } else {
+          exertionClock = 0;
         }
 
         // View kick is a critically damped spring on the eye's pitch. In third
@@ -1730,8 +1793,19 @@ export const GameViewport3D = forwardRef<
                 current.inventory.axe ? 24 : 13,
                 0.38,
               );
+              meleeConnected = true;
             }
           }
+
+          // A swing that finds nothing should not sound like a swing that buries
+          // an axe in someone. Connecting plays the wet chop; missing plays the
+          // blade biting whatever was behind them.
+          if (current.inventory.axe) {
+            current.onSound(meleeConnected ? "axe-flesh" : "axe-wall", {
+              intensity: meleeConnected ? 1 : 0.6,
+            });
+          }
+          meleeConnected = false;
         }
 
         for (

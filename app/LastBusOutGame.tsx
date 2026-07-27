@@ -291,9 +291,16 @@ export function LastBusOutGame() {
       setResetToken((value) => value + 1);
       setChapterCard((value) => value + 1);
       playSound("objective");
+      // Changing floor is progress, not an interruption. The player gets the
+      // floor card and a note that the run is saved, and walks straight on —
+      // there is no confirmation to dismiss.
+      showToast("Progress saved");
       window.setTimeout(() => saveGame(nextChapter, nextStep), 0);
+      // Re-take the pointer once the new floor is up, so first person does not
+      // silently drop to a dead mouse after a transition.
+      window.setTimeout(() => viewportRef.current?.captureLook(), 60);
     },
-    [playSound, saveGame],
+    [playSound, saveGame, showToast],
   );
 
   const advanceStep = useCallback(
