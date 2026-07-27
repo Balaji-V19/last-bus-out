@@ -145,8 +145,6 @@ type EnemyActor = {
   dead: boolean;
   /** When it came to rest, so it cannot rise the instant it lands. */
   restedAt: number;
-  /** Whether this one is capable of getting back up. Never revealed. */
-  canRise: boolean;
   /** Counts up while getting up, so the rise can be animated. */
   rising: number;
   /** Per-kill death variation, so no two go down the same way. */
@@ -1031,7 +1029,6 @@ export const GameViewport3D = forwardRef<
         wounds: 0,
         dead: false,
         restedAt: 0,
-        canRise: false,
         rising: 0,
         deathSpin: 0,
         deathTopple: 0,
@@ -2092,9 +2089,6 @@ export const GameViewport3D = forwardRef<
               enemy.dead = true;
               enemy.restedAt = time;
               enemy.healthBar.group.visible = false;
-              // Some of them are not finished. Which ones is decided here and
-              // never revealed, so no corpse can be assumed safe.
-              enemy.canRise = Math.random() < 0.34;
               corpses.push(enemy);
               // Bound the number kept, so a long fight cannot accumulate
               // bodies without limit. The oldest is cleared first.
@@ -2790,9 +2784,13 @@ export const GameViewport3D = forwardRef<
           const corpse = corpses[index];
           if (corpse.rising > 0) {
             // Getting up: unwind the fall, then hand it back to the AI.
-            corpse.rising = Math.min(1, corpse.rising + delta * 1.35);
-            const remaining = 1 - corpse.rising;
-            const eased = remaining ** 1.6;
+            // Fast enough to be a shock rather than a transformation.
+            corpse.rising = Math.min(1, corpse.rising + delta * 4.6);
+            // Most of the movement lands in the first 100 ms and the rest
+            // settles: 56 per cent upright at 50 ms, 79 at 100, done by 230.
+            // An evenly paced rise reads as a transformation; this reads as a
+            // body snapping up off the floor.
+            const eased = (1 - corpse.rising) ** 2.4;
             deathAxis
               .set(Math.cos(corpse.deathTopple), 0, -Math.sin(corpse.deathTopple))
               .normalize();
@@ -2809,7 +2807,6 @@ export const GameViewport3D = forwardRef<
               corpse.rising = 0;
               corpse.dead = false;
               corpse.dying = false;
-              corpse.canRise = false;
               corpse.deathTimer = 0;
               corpse.hp = Math.max(24, Math.round(corpse.maxHp * 0.45));
               corpse.root.quaternion.identity();
@@ -2823,31 +2820,30 @@ export const GameViewport3D = forwardRef<
             continue;
           }
 
-          if (!corpse.canRise) continue;
-          // Not immediately, and not from across the room: it waits until the
-          // player is close enough to have decided it was safe.
-          if (time - corpse.restedAt < 6) continue;
+          // It goes when the player walks over it, not from across the room.
+          // Standing on a body is the moment the player has decided it is
+          // just scenery, which is the moment worth taking from them.
+          if (time - corpse.restedAt < 4) continue;
           const range = corpse.root.position.distanceTo(playerRoot.position);
-          if (range > 3.6) continue;
-          // Random, checked at a low rate, so walking the same corridor twice
-          // does not give the same result.
+          if (range > 1.15) continue;
+          // Rolled on contact rather than decided when it fell, so the same
+          // body stepped over twice does not give the same answer, and no
+          // corpse is ever known to be safe.
           corpseCheckClock -= delta;
           if (corpseCheckClock > 0) continue;
-          corpseCheckClock = 0.4;
-          if (Math.random() > 0.3) continue;
+          corpseCheckClock = 0.45;
+          if (Math.random() > 0.38) continue;
 
           corpse.rising = 0.001;
-          current.onSound("zombie-scream", {
-            intensity: 1.15,
-            pan: panFor(corpse.root.position, 0.95),
-          });
-          current.onSound("zombie-lunge", {
-            intensity: 1,
-            pan: panFor(corpse.root.position, 0.9),
-          });
-          horrorPulse = Math.max(horrorPulse, 4.5);
-          cameraShake = Math.max(cameraShake, 0.42);
-          kickPitch += 0.09;
+          // Right on top of the player, so it is centred rather than panned
+          // off to one side — it is not somewhere over there, it is here.
+          current.onSound("zombie-scream", { intensity: 1.25, pan: 0 });
+          current.onSound("zombie-lunge", { intensity: 1.1, pan: 0 });
+          horrorPulse = Math.max(horrorPulse, 5.5);
+          cameraShake = Math.max(cameraShake, 0.58);
+          kickPitch += 0.14;
+          // Already swinging as it comes up.
+          corpse.attackClock = 0.28;
         }
 
         // Doors.
