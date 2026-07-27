@@ -15,6 +15,7 @@ import {
   type GameSoundOptions,
 } from "./game3d/audio";
 import type { EquipmentKind, GameChapter } from "./game3d/scene";
+import type { PointOfView } from "./GameViewport3D";
 
 type Mode = "menu" | "playing" | "paused" | "ending";
 
@@ -41,6 +42,9 @@ type SaveData = {
 };
 
 const SAVE_KEY = "last-bus-out-st-orison-save-v3";
+// Point of view is a display preference rather than campaign state, so it is
+// stored separately and survives starting a new run or clearing a save.
+const POV_KEY = "last-bus-out-pov";
 
 const CHAPTERS: Record<
   GameChapter,
@@ -181,6 +185,7 @@ export function LastBusOutGame() {
   const [combatCombo, setCombatCombo] = useState(0);
   const [combatScore, setCombatScore] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
+  const [pov, setPov] = useState<PointOfView>("first");
   const [toast, setToast] = useState("");
   const [prompt, setPrompt] = useState<{ id: string; label: string } | null>(null);
   const [fuelProgress, setFuelProgress] = useState(0);
@@ -621,20 +626,46 @@ export function LastBusOutGame() {
     );
   }, [loadChapter, medicine, saveGame]);
 
+  // Resuming has to re-acquire pointer lock, and pointer lock can only be
+  // requested from a user gesture. Both the pause button and the Escape key
+  // qualify; Chrome additionally throttles re-locking for about a second after
+  // an Escape exit, in which case the request is dropped and the next click on
+  // the canvas takes it instead.
+  const resumePlay = useCallback(() => {
+    setMode("playing");
+    viewportRef.current?.captureLook();
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (mode === "playing") setMode("paused");
-      else if (mode === "paused") setMode("playing");
+      else if (mode === "paused") resumePlay();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mode]);
+  }, [mode, resumePlay]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setHasSave(Boolean(getSave())), 0);
     return () => window.clearTimeout(timer);
   }, []);
+
+  // Restore the saved point of view after mount so the server-rendered markup
+  // and the first client render agree. Deferred by a timeout for the same
+  // reason as the save probe above: it keeps the read out of the render pass.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const stored = window.localStorage.getItem(POV_KEY);
+      if (stored === "first" || stored === "third") setPov(stored);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(POV_KEY, pov);
+  }, [pov]);
 
   useEffect(() => {
     if (mode !== "playing" || typeof window === "undefined") return;
@@ -772,8 +803,11 @@ export function LastBusOutGame() {
             health={health}
             ammo={ammo}
             inventory={inventory}
+            pov={pov}
             resetToken={resetToken}
             onReady={() => setWorldReady(true)}
+            onPovChange={setPov}
+            onPointerLockLost={() => setMode("paused")}
             onInteraction={handleInteraction}
             onPromptChange={setPrompt}
             onStaminaChange={setStamina}
@@ -936,7 +970,9 @@ export function LastBusOutGame() {
           </div>
 
           <div className="look-hint">
-            Drag to look · Shift to run · F melee
+            {pov === "first" ? "Click to look" : "Drag to look"} · V for{" "}
+            {pov === "first" ? "third person" : "first person"} · Shift to run ·
+            F melee
             {inventory.pistol ? " · G pistol" : ""}
           </div>
 
@@ -1065,8 +1101,8 @@ export function LastBusOutGame() {
             <div className="control-legend">
               <span>WASD · Walk</span>
               <span>Shift · Run</span>
-              <span>Drag · Look</span>
-              <span>Wheel · Zoom</span>
+              <span>Mouse · Look</span>
+              <span>V · Perspective</span>
               <span>F · Attack</span>
               <span>G · Fire pistol</span>
               <span>E · Interact</span>
@@ -1106,7 +1142,7 @@ export function LastBusOutGame() {
             </p>
             <div className="pause-actions">
               {health > 0 && infection < 100 && (
-                <button className="primary-button" onClick={() => setMode("playing")}>
+                <button className="primary-button" onClick={resumePlay}>
                   Return to the hospital
                 </button>
               )}

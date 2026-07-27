@@ -30,6 +30,8 @@ import {
 
 type Inventory = Partial<Record<EquipmentKind, boolean>>;
 
+export type PointOfView = "first" | "third";
+
 type GameViewportProps = {
   chapter: GameChapter;
   mode: "menu" | "playing" | "paused" | "ending";
@@ -38,8 +40,11 @@ type GameViewportProps = {
   health: number;
   ammo: number;
   inventory: Inventory;
+  pov: PointOfView;
   resetToken: number;
   onReady: () => void;
+  onPovChange: (pov: PointOfView) => void;
+  onPointerLockLost: () => void;
   onInteraction: (id: string) => void;
   onPromptChange: (prompt: { id: string; label: string } | null) => void;
   onStaminaChange: (value: number) => void;
@@ -65,6 +70,7 @@ export type GameViewportHandle = {
   shoot: () => void;
   dodge: () => void;
   interact: () => void;
+  captureLook: () => void;
   setMove: (
     key: "w" | "a" | "s" | "d" | "shift",
     active: boolean,
@@ -247,6 +253,7 @@ export const GameViewport3D = forwardRef<
     shoot: () => undefined,
     dodge: () => undefined,
     interact: () => undefined,
+    captureLook: () => undefined,
     setMove: () => undefined,
   });
 
@@ -261,6 +268,7 @@ export const GameViewport3D = forwardRef<
       shoot: () => actionsRef.current.shoot(),
       dodge: () => actionsRef.current.dodge(),
       interact: () => actionsRef.current.interact(),
+      captureLook: () => actionsRef.current.captureLook(),
       setMove: (key, active) => actionsRef.current.setMove(key, active),
     }),
     [],
@@ -470,8 +478,21 @@ export const GameViewport3D = forwardRef<
     const livingEnemies: EnemyActor[] = [];
     let animationFrame = 0;
     let cameraYaw = 0;
+    // Third-person pitch raises the camera on its boom, so positive looks DOWN.
+    // First-person pitch is the eye's own rotation.x, where positive looks UP.
+    // They are kept separate deliberately: folding them into one value inverts
+    // the look direction the moment the player toggles.
     let cameraPitch = 0.2;
+    let lookPitch = 0;
     let cameraDistance = props.chapter === "survival" ? 4.7 : 4.35;
+    let bobPhase = 0;
+    let bobAmplitude = 0;
+    let sprintBlend = 0;
+    let eyeHeight = 1.62;
+    let kickPitch = 0;
+    let kickPitchVelocity = 0;
+    let kickYaw = 0;
+    let lastStrideSign = 1;
     let dragPointer: { id: number; x: number; y: number } | null = null;
     let attack = 0;
     let attackHit = false;
@@ -485,7 +506,6 @@ export const GameViewport3D = forwardRef<
     let encounterWasActive = false;
     let fuelProgress = 0;
     let stationWaveClock = 0;
-    let footstepClock = 0;
     let zombieVoiceClock = 1.4 + Math.random() * 1.8;
     let survivalWave = 0;
     let survivalWaveClock = 1.25;
@@ -857,11 +877,20 @@ export const GameViewport3D = forwardRef<
       propsRef.current.onInteraction(currentPrompt);
     };
 
+    const togglePov = () => {
+      const next = propsRef.current.pov === "first" ? "third" : "first";
+      if (next === "third" && isPointerLocked()) document.exitPointerLock();
+      propsRef.current.onPovChange(next);
+    };
+
     actionsRef.current = {
       attack: performAttack,
       shoot: performShoot,
       dodge: performDodge,
       interact: performInteract,
+      // Wrapped rather than passed directly: requestPointerLock is declared
+      // further down, so a bare reference here would hit the temporal dead zone.
+      captureLook: () => requestPointerLock(),
       setMove: (key, active) => {
         keys[key] = active;
       },
@@ -870,9 +899,20 @@ export const GameViewport3D = forwardRef<
     const keyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
       if (
-        ["w", "a", "s", "d", "shift", "e", "f", "g", " ", "q", "r"].includes(
-          key,
-        )
+        [
+          "w",
+          "a",
+          "s",
+          "d",
+          "shift",
+          "e",
+          "f",
+          "g",
+          " ",
+          "q",
+          "r",
+          "v",
+        ].includes(key)
       ) {
         event.preventDefault();
       }
@@ -881,6 +921,7 @@ export const GameViewport3D = forwardRef<
       if (key === "g") performShoot();
       if (key === " ") performDodge();
       if (key === "e") performInteract();
+      if (key === "v") togglePov();
     };
     const keyUp = (event: KeyboardEvent) => {
       keys[event.key.toLowerCase()] = false;
@@ -888,7 +929,25 @@ export const GameViewport3D = forwardRef<
     window.addEventListener("keydown", keyDown, { passive: false });
     window.addEventListener("keyup", keyUp);
 
+    const isPointerLocked = () =>
+      document.pointerLockElement === renderer.domElement;
+
+    const requestPointerLock = () => {
+      if (coarsePointer) return;
+      if (isPointerLocked()) return;
+      // Chrome returns a Promise here while the DOM lib still types it void, and
+      // it rejects if the browser is still throttling a recent Escape exit.
+      const result: unknown = renderer.domElement.requestPointerLock();
+      if (result instanceof Promise) result.catch(() => undefined);
+    };
+
     const pointerDown = (event: PointerEvent) => {
+      // First person uses pointer lock so the look has no drag boundary. Touch
+      // devices have no pointer lock, so they keep drag-look in both modes.
+      if (propsRef.current.pov === "first" && !coarsePointer) {
+        requestPointerLock();
+        return;
+      }
       dragPointer = {
         id: event.pointerId,
         x: event.clientX,
@@ -898,34 +957,72 @@ export const GameViewport3D = forwardRef<
       renderer.domElement.classList.add("looking");
     };
     const pointerMove = (event: PointerEvent) => {
-      if (!dragPointer || dragPointer.id !== event.pointerId) return;
-      const dx = event.clientX - dragPointer.x;
-      const dy = event.clientY - dragPointer.y;
-      cameraYaw -= dx * 0.0042;
-      cameraPitch = THREE.MathUtils.clamp(
-        cameraPitch - dy * 0.003,
-        -0.08,
-        0.58,
-      );
-      dragPointer.x = event.clientX;
-      dragPointer.y = event.clientY;
+      const locked = isPointerLocked();
+      if (!locked && (!dragPointer || dragPointer.id !== event.pointerId)) {
+        return;
+      }
+      const dx = locked ? event.movementX : event.clientX - dragPointer!.x;
+      const dy = locked ? event.movementY : event.clientY - dragPointer!.y;
+      if (propsRef.current.pov === "first") {
+        // Raw pointer-lock deltas run about 1.6x a drag delta, so first person
+        // uses a lower coefficient to land on a comparable feel.
+        cameraYaw -= dx * 0.0026;
+        // Roughly -66 to +60 degrees. Deliberately short of straight up/down:
+        // looking at the ceiling plane or through an invisible body breaks it.
+        lookPitch = THREE.MathUtils.clamp(
+          lookPitch - dy * 0.0026,
+          -1.15,
+          1.05,
+        );
+      } else {
+        cameraYaw -= dx * 0.0042;
+        cameraPitch = THREE.MathUtils.clamp(
+          cameraPitch - dy * 0.003,
+          -0.08,
+          0.58,
+        );
+      }
+      if (dragPointer) {
+        dragPointer.x = event.clientX;
+        dragPointer.y = event.clientY;
+      }
     };
     const pointerUp = () => {
       dragPointer = null;
       renderer.domElement.classList.remove("looking");
     };
     const wheel = (event: WheelEvent) => {
+      // Zoom is a third-person concept. Keep the value intact while in first
+      // person so toggling back restores the player's chosen boom length.
+      if (propsRef.current.pov === "first") return;
       cameraDistance = THREE.MathUtils.clamp(
         cameraDistance + event.deltaY * 0.004,
         3.3,
         7.4,
       );
     };
+    const pointerLockChange = () => {
+      if (isPointerLocked()) {
+        renderer.domElement.classList.add("looking");
+        return;
+      }
+      renderer.domElement.classList.remove("looking");
+      // Escape releases the lock, and browsers disagree about whether the
+      // keydown also reaches us. Driving pause off the lock state instead makes
+      // Escape behave identically everywhere.
+      if (
+        propsRef.current.pov === "first" &&
+        propsRef.current.mode === "playing"
+      ) {
+        propsRef.current.onPointerLockLost();
+      }
+    };
     renderer.domElement.addEventListener("pointerdown", pointerDown);
     renderer.domElement.addEventListener("pointermove", pointerMove);
     renderer.domElement.addEventListener("pointerup", pointerUp);
     renderer.domElement.addEventListener("pointercancel", pointerUp);
     renderer.domElement.addEventListener("wheel", wheel, { passive: true });
+    document.addEventListener("pointerlockchange", pointerLockChange);
 
     const syncWorldState = (time: number, delta: number) => {
       const current = propsRef.current;
@@ -1208,12 +1305,23 @@ export const GameViewport3D = forwardRef<
           ) {
             playerRoot.position.z = nextZ;
           }
-          const targetRotation = Math.atan2(-movement.x, -movement.z);
-          playerRoot.rotation.y = dampAngle(
-            playerRoot.rotation.y,
-            targetRotation,
-            Math.min(1, delta * 11),
-          );
+          if (current.pov !== "first") {
+            const targetRotation = Math.atan2(-movement.x, -movement.z);
+            playerRoot.rotation.y = dampAngle(
+              playerRoot.rotation.y,
+              targetRotation,
+              Math.min(1, delta * 11),
+            );
+          }
+        }
+
+        // The torch and the hero mesh are both children of playerRoot, so in
+        // first person the body must face exactly where the player is looking,
+        // undamped and regardless of whether they are moving. Damping it, or
+        // gating it on movement, makes the beam swing away when you strafe or
+        // freeze when you turn on the spot.
+        if (current.pov === "first") {
+          playerRoot.rotation.y = cameraYaw;
         }
 
         if (running && moving) stamina = Math.max(0, stamina - delta * 17);
@@ -1234,20 +1342,53 @@ export const GameViewport3D = forwardRef<
           playerRoot.position.distanceTo(lastPlayerPosition) /
           Math.max(delta, 0.001);
         lastPlayerPosition.copy(playerRoot.position);
+
+        // Head bob. Only the eye POSITION is bobbed, never the look axis: a few
+        // centimetres of vertical travel reads as walking, whereas rotating the
+        // view on the same curve is the classic nausea source. 32 mm is the
+        // ceiling here and is deliberately conservative.
+        const bobRate = running ? 11.4 : 7.2;
+        const bobScale = Math.min(
+          1,
+          actualSpeed / (running ? 3.15 : 1.35),
+        );
+        bobPhase += delta * bobRate * bobScale;
+        const bobTarget = moving ? (running ? 0.032 : 0.018) : 0;
+        bobAmplitude = THREE.MathUtils.lerp(
+          bobAmplitude,
+          bobTarget,
+          1 - Math.exp(-delta * 6),
+        );
+        sprintBlend = THREE.MathUtils.lerp(
+          sprintBlend,
+          running && moving ? 1 : 0,
+          1 - Math.exp(-delta * 4),
+        );
+
+        // Footsteps land on the bob's downstroke rather than on an arbitrary
+        // clock, so the step you hear matches the step you feel.
         if (actualSpeed > 0.18) {
-          footstepClock -= delta;
-          if (footstepClock <= 0) {
+          const stride = Math.cos(bobPhase * 2);
+          if (stride < 0 && lastStrideSign >= 0) {
             current.onSound("footstep", {
               running,
               surface: "tile",
               intensity: running ? 1 : 0.82,
               pan: (Math.random() - 0.5) * 0.16,
             });
-            footstepClock = running ? 0.27 : 0.43;
           }
+          lastStrideSign = stride < 0 ? -1 : 1;
         } else {
-          footstepClock = 0;
+          lastStrideSign = 1;
         }
+
+        // View kick is a critically damped spring on the eye's pitch. In third
+        // person the positional camera shake below is fine; in first person the
+        // same random jitter is the single worst nausea offender, so impacts
+        // are expressed as a rotational recoil that settles in about 0.22 s.
+        kickPitchVelocity += (-kickPitch * 185 - kickPitchVelocity * 23) * delta;
+        kickPitch += kickPitchVelocity * delta;
+        kickYaw = THREE.MathUtils.lerp(kickYaw, 0, 1 - Math.exp(-delta * 9));
         if (hero) {
           const heroState: AnimationState =
             heroHitTimer > 0.05
@@ -1421,10 +1562,19 @@ export const GameViewport3D = forwardRef<
             enemy.attackAnimation = 0.74;
             heroHitTimer = 0.36;
             cameraShake = enemy.character?.style === "heavy" ? 0.58 : 0.34;
+            // First person expresses the same impact as a rotational recoil,
+            // biased away from whoever hit you, rather than positional jitter.
+            kickPitch +=
+              enemy.character?.style === "heavy"
+                ? 0.11
+                : enemy.character?.style === "runner"
+                  ? 0.075
+                  : 0.055;
             attackDirectionVector
               .copy(playerRoot.position)
               .sub(enemy.root.position)
               .normalize();
+            kickYaw += attackDirectionVector.x > 0 ? -0.03 : 0.03;
             spawnBlood(
               bloodOrigin.copy(playerRoot.position).setY(
                 playerRoot.position.y + 1.14,
@@ -2011,30 +2161,90 @@ export const GameViewport3D = forwardRef<
 
       updateBlood(delta);
       updateShots(delta);
-      cameraTarget
-        .copy(playerRoot.position)
-        .add(cameraTargetOffset);
-      const horizontalDistance =
-        cameraDistance * Math.cos(cameraPitch);
-      desiredCamera.set(
-        playerRoot.position.x +
-          Math.sin(cameraYaw) * horizontalDistance,
-        playerRoot.position.y +
-          2.0 +
-          Math.sin(cameraPitch) * cameraDistance,
-        playerRoot.position.z +
-          Math.cos(cameraYaw) * horizontalDistance,
-      );
-      if (cameraShake > 0) {
-        desiredCamera.add(
-          cameraShakeOffset.set(
-            (Math.random() - 0.5) * cameraShake,
-            (Math.random() - 0.5) * cameraShake * 0.62,
-            (Math.random() - 0.5) * cameraShake,
-          ),
-        );
+
+      const firstPerson = current.pov === "first";
+      if (hero) {
+        // Hide the body rather than tear it down, so toggling is instant. The
+        // detail flag also drops the mixer to 20 Hz while it cannot be seen.
+        if (hero.root.visible === firstPerson) {
+          hero.root.visible = !firstPerson;
+          setCharacterDetail(hero, !firstPerson);
+        }
       }
-      const targetFov = 58 + fear * 0.018;
+
+      if (firstPerson) {
+        eyeHeight = THREE.MathUtils.lerp(
+          eyeHeight,
+          1.62,
+          1 - Math.exp(-delta * 9),
+        );
+        // Snap, never lerp, the first-person eye. Smoothing the head position
+        // against the body it is attached to reads as swimming.
+        camera.position.set(
+          playerRoot.position.x,
+          playerRoot.position.y + eyeHeight + Math.sin(bobPhase * 2) * bobAmplitude,
+          playerRoot.position.z,
+        );
+        // Lateral sway is applied along the camera's own right vector.
+        const swayAmount = Math.sin(bobPhase) * bobAmplitude * 0.55;
+        camera.position.x += Math.cos(cameraYaw) * swayAmount;
+        camera.position.z += -Math.sin(cameraYaw) * swayAmount;
+        camera.rotation.order = "YXZ";
+        camera.rotation.set(
+          lookPitch + kickPitch,
+          cameraYaw + kickYaw,
+          Math.sin(bobPhase) * (sprintBlend > 0.5 ? 0.0085 : 0.004),
+        );
+        // The torch target is a child of playerRoot, which already carries yaw,
+        // so only pitch has to be reapplied here. Without this the beam points
+        // at the floor ahead no matter where the player is looking.
+        flashlightTarget.position.set(
+          0.1,
+          1.52 + 10 * Math.sin(lookPitch),
+          -10 * Math.cos(lookPitch),
+        );
+        flashlight.position.set(0.14, 1.52, -0.06);
+      } else {
+        cameraTarget
+          .copy(playerRoot.position)
+          .add(cameraTargetOffset);
+        const horizontalDistance =
+          cameraDistance * Math.cos(cameraPitch);
+        desiredCamera.set(
+          playerRoot.position.x +
+            Math.sin(cameraYaw) * horizontalDistance,
+          playerRoot.position.y +
+            2.0 +
+            Math.sin(cameraPitch) * cameraDistance,
+          playerRoot.position.z +
+            Math.cos(cameraYaw) * horizontalDistance,
+        );
+        if (cameraShake > 0) {
+          desiredCamera.add(
+            cameraShakeOffset.set(
+              (Math.random() - 0.5) * cameraShake,
+              (Math.random() - 0.5) * cameraShake * 0.62,
+              (Math.random() - 0.5) * cameraShake,
+            ),
+          );
+        }
+        camera.rotation.order = "XYZ";
+        camera.position.lerp(
+          desiredCamera,
+          1 - Math.exp(-delta * 9),
+        );
+        cameraLookAhead.copy(forward).multiplyScalar(2.5);
+        camera.lookAt(cameraTarget.add(cameraLookAhead));
+        flashlightTarget.position.set(0.1, 1.02, -10);
+        flashlight.position.set(0.28, 1.46, -0.34);
+      }
+
+      // Dread widens the view slightly; first person amplifies any FOV change,
+      // so it gets a gentler coefficient plus a sprint push, which is the
+      // strongest "running for your life" cue available for one matrix update.
+      const targetFov = firstPerson
+        ? 68 + fear * 0.01 + sprintBlend * 4.5
+        : 58 + fear * 0.018;
       if (Math.abs(camera.fov - targetFov) > 0.02) {
         camera.fov = THREE.MathUtils.lerp(
           camera.fov,
@@ -2043,12 +2253,6 @@ export const GameViewport3D = forwardRef<
         );
         camera.updateProjectionMatrix();
       }
-      camera.position.lerp(
-        desiredCamera,
-        1 - Math.exp(-delta * 9),
-      );
-      cameraLookAhead.copy(forward).multiplyScalar(2.5);
-      camera.lookAt(cameraTarget.add(cameraLookAhead));
       shadowUpdateClock += delta;
       if (
         renderer.shadowMap.enabled &&
@@ -2073,6 +2277,10 @@ export const GameViewport3D = forwardRef<
       renderer.domElement.removeEventListener("pointerup", pointerUp);
       renderer.domElement.removeEventListener("pointercancel", pointerUp);
       renderer.domElement.removeEventListener("wheel", wheel);
+      document.removeEventListener("pointerlockchange", pointerLockChange);
+      if (document.pointerLockElement === renderer.domElement) {
+        document.exitPointerLock();
+      }
       propsRef.current.onPromptChange(null);
       if (hero) disposeAnimatedCharacter(hero);
       if (maya?.character) disposeAnimatedCharacter(maya.character);
