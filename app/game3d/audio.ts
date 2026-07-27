@@ -81,6 +81,32 @@ function clamp(value: number, min: number, max: number) {
  */
 const VOICE_VARIANTS = 4;
 
+/**
+ * Recorded one-shots, sliced from the Pixabay sources listed in
+ * public/models/THIRD_PARTY.md.
+ *
+ * These cover the moments a real recording beats synthesis — the scream, the
+ * lunge landing, the death, the player being hurt. The frequent, low-level
+ * cues (breathing, the windup before a swing, the wet impact itself) stay
+ * procedural, because they fire constantly and generated variants never repeat
+ * whereas a handful of files audibly do.
+ *
+ * If any of these fail to load the synthesised voice is used instead, so the
+ * game never falls silent over a missing asset.
+ */
+const VOICE_SAMPLES: Partial<Record<VoiceKind | "impact", readonly string[]>> = {
+  growl: ["growl-a", "growl-b", "growl-c"],
+  alert: ["growl-a", "growl-c"],
+  scream: ["scream-a", "scream-b", "scream-c", "scream-d"],
+  pain: ["hurt-a", "hurt-b", "hurt-c"],
+};
+
+/** Recorded hits used by specific events rather than by a voice kind. */
+const EVENT_SAMPLES: Partial<Record<GameSoundEvent, readonly string[]>> = {
+  "zombie-attack": ["attack-a", "attack-b", "attack-c"],
+  "zombie-death": ["death-a", "death-b"],
+};
+
 export class SurvivalAudio {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -134,6 +160,7 @@ export class SurvivalAudio {
       this.master = this.context.createGain();
       this.master.gain.value = 0.78;
       this.master.connect(this.context.destination);
+      this.primeSamples(this.context);
     }
     if (this.context.state === "suspended") {
       void this.context.resume();
@@ -149,6 +176,87 @@ export class SurvivalAudio {
    */
   private voiceBank = new Map<string, AudioBuffer[]>();
   private voiceCursor = new Map<string, number>();
+  /** Decoded recordings, keyed by file stem. */
+  private sampleBank = new Map<string, AudioBuffer>();
+  private sampleLoads = new Map<string, Promise<void>>();
+
+  /**
+   * Fetch and decode a recording. Failures are swallowed deliberately: a
+   * missing or undecodable file must degrade to the synthesised voice rather
+   * than throw inside a gameplay callback.
+   */
+  private loadSample(context: AudioContext, name: string) {
+    if (this.sampleBank.has(name)) return;
+    if (this.sampleLoads.has(name)) return;
+    const url = new URL(
+      `audio/creatures/${name}.ogg`,
+      document.baseURI,
+    ).toString();
+    const load = fetch(url)
+      .then((response) => {
+        if (!response.ok) throw new Error(`${response.status}`);
+        return response.arrayBuffer();
+      })
+      .then((data) => context.decodeAudioData(data))
+      .then((buffer) => {
+        this.sampleBank.set(name, buffer);
+      })
+      .catch(() => {
+        // Leave it absent; playVoice falls back to synthesis.
+      });
+    this.sampleLoads.set(name, load);
+  }
+
+  /** Warm the recordings so the first growl is not the one that stutters. */
+  private primeSamples(context: AudioContext) {
+    for (const names of Object.values(VOICE_SAMPLES)) {
+      for (const name of names ?? []) this.loadSample(context, name);
+    }
+    for (const names of Object.values(EVENT_SAMPLES)) {
+      for (const name of names ?? []) this.loadSample(context, name);
+    }
+  }
+
+  /** Plays a decoded recording by stem, returning false if it is not ready. */
+  private playSample(
+    names: readonly string[],
+    volume: number,
+    pan: number,
+    detune: number,
+  ) {
+    const context = this.ensureContext();
+    if (!context) return false;
+    const ready = names.filter((name) => this.sampleBank.has(name));
+    if (ready.length === 0) {
+      for (const name of names) this.loadSample(context, name);
+      return false;
+    }
+    const key = names.join(",");
+    const cursor =
+      (this.sampleCursor.get(key) ?? 0) +
+      1 +
+      Math.floor(Math.random() * Math.max(1, ready.length - 1));
+    const index = cursor % ready.length;
+    this.sampleCursor.set(key, index);
+
+    const source = context.createBufferSource();
+    source.buffer = this.sampleBank.get(ready[index])!;
+    source.playbackRate.value = 1 + (Math.random() * 2 - 1) * detune;
+    const gain = context.createGain();
+    gain.gain.value = volume;
+    const output = this.output(context, pan);
+    source.connect(gain);
+    gain.connect(output);
+    source.start();
+    source.onended = () => {
+      source.disconnect();
+      gain.disconnect();
+      output.disconnect();
+    };
+    return true;
+  }
+
+  private sampleCursor = new Map<string, number>();
 
   private getVoices(context: AudioContext, kind: VoiceKind | "impact") {
     const cached = this.voiceBank.get(kind);
@@ -185,6 +293,11 @@ export class SurvivalAudio {
   ) {
     const context = this.ensureContext();
     if (!context) return;
+    // Prefer a recording where one exists for this voice.
+    const samples = VOICE_SAMPLES[kind];
+    if (samples && this.playSample(samples, volume, pan, Math.min(detune, 0.07))) {
+      return;
+    }
     const buffers = this.getVoices(context, kind);
     const cursor = (this.voiceCursor.get(kind) ?? 0) + 1 +
       Math.floor(Math.random() * (buffers.length - 1));
@@ -455,8 +568,14 @@ export class SurvivalAudio {
     }
 
     if (event === "zombie-attack") {
-      this.playVoice("impact", 0.72 * intensity, pan, 0.1);
-      this.playVoice("lunge", 0.4 * intensity, pan);
+      // Recorded snarl if available, with the synthesised wet impact layered
+      // underneath either way — the recording carries the voice, the synthesis
+      // carries the blow landing on the player's body.
+      const attackSamples = EVENT_SAMPLES["zombie-attack"];
+      if (!attackSamples || !this.playSample(attackSamples, 0.8 * intensity, pan, 0.07)) {
+        this.playVoice("lunge", 0.4 * intensity, pan);
+      }
+      this.playVoice("impact", 0.62 * intensity, pan, 0.1);
       return;
     }
 
@@ -466,8 +585,11 @@ export class SurvivalAudio {
     }
 
     if (event === "zombie-death") {
-      this.playVoice("breath", 0.72 * intensity, pan, 0.14);
-      this.playVoice("growl", 0.4 * intensity, pan, 0.16);
+      const deathSamples = EVENT_SAMPLES["zombie-death"];
+      if (!deathSamples || !this.playSample(deathSamples, 0.82 * intensity, pan, 0.08)) {
+        this.playVoice("breath", 0.72 * intensity, pan, 0.14);
+        this.playVoice("growl", 0.4 * intensity, pan, 0.16);
+      }
       return;
     }
 

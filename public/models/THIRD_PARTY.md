@@ -39,6 +39,45 @@ Footsteps, combat impacts, weapon movement, zombie vocalizations, damage cues,
 healing, and wave alerts are generated locally at runtime by the Web Audio
 implementation in `app/game3d/audio.ts`.
 
+### Creature and injury one-shots
+
+`public/audio/creatures/*.ogg` are cut from sound effects downloaded from
+Pixabay. They are stored locally and are never requested from Pixabay at
+runtime.
+
+**Zombie vocalisations** — `growl-a`, `growl-b`, `growl-c`, `attack-a`,
+`attack-b`, `attack-c`, `scream-a`, `death-a`, `death-b`, and the
+`female-zombie-screams` cuts `scream-b`, `scream-c`, `scream-d`.
+
+- Creator: DRAGON-STUDIO
+- Source: https://pixabay.com/users/dragon-studio/ via https://pixabay.com/sound-effects/
+- License: Pixabay Content License
+- License URL: https://pixabay.com/service/license-summary/
+- Retrieved: 2026-07-27
+- Local changes: trimmed to individual one-shots, downmixed to mono, resampled
+  to 32 kHz, loudness-normalised to −16 LUFS with −1.5 dBTP, short fades
+  applied at both ends, re-encoded to Ogg Vorbis.
+
+**Player injury** — `hurt-a`, `hurt-b`, `hurt-c`.
+
+- Creator: freesound_community
+- Source: https://pixabay.com/users/freesound_community/ via https://pixabay.com/sound-effects/
+- License: Pixabay Content License
+- License URL: https://pixabay.com/service/license-summary/
+- Retrieved: 2026-07-27
+- Local changes: as above.
+
+Note that the Pixabay Content License is **not** CC0. It permits use in a game
+without attribution, and forbids redistributing the audio as standalone files
+or as part of a sound pack. The credits above are recorded because this
+repository requires provenance for every external asset, not because the
+license demands attribution.
+
+The remaining creature cues — breathing, the windup before a swing, the wet
+impact of a blow, the caught breath after one — are synthesised at runtime by
+`app/game3d/voice.ts` and carry no third-party license. They also serve as the
+fallback if any recording fails to load.
+
 The background score is stored locally at
 `public/audio/dissonant-horror-loop.ogg`.
 
