@@ -645,9 +645,18 @@ export function LastBusOutGame() {
   // that at the moment it matters the player is hearing the creature and
   // nothing else; back to full past twenty. Applied directly to the audio rig
   // rather than through state, so it does not re-render the HUD.
+  const audioKeepAliveRef = useRef(0);
   const handleThreatProximity = useCallback((distance: number) => {
-    const duck = clamp((20 - distance) / 16, 0, 1);
-    audioRef.current?.setMusicDuck(duck);
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.setMusicDuck(clamp((20 - distance) / 16, 0, 1));
+    // This arrives about eight times a second; the recovery check only needs to
+    // run every couple of seconds.
+    audioKeepAliveRef.current += 1;
+    if (audioKeepAliveRef.current >= 16) {
+      audioKeepAliveRef.current = 0;
+      audio.keepAlive();
+    }
   }, []);
 
   // Something is coming. The banner is deliberately text-only and short-lived;
@@ -688,6 +697,21 @@ export function LastBusOutGame() {
   useEffect(() => {
     const timer = window.setTimeout(() => setHasSave(Boolean(getSave())), 0);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  // Browsers suspend audio contexts and pause media when a tab loses focus, and
+  // neither comes back on its own. Recover the moment the tab is visible again
+  // rather than waiting for the slow in-game check.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") audioRef.current?.keepAlive();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
   }, []);
 
   // Restore the saved point of view after mount so the server-rendered markup

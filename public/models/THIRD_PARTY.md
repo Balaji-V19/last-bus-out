@@ -13,7 +13,10 @@ Meshes asset bundle.
 - License URL: https://creativecommons.org/publicdomain/zero/1.0/
 - Local changes: A-pose to T-pose conversion, skeletal weight transfer,
   original rescue/paramedic/infected materials, clothing regions, hair,
-  survival gear, wounds, scale changes, and game-ready GLB export.
+  survival gear, wounds, scale changes, and game-ready GLB export. Skin weights
+  were later repacked from 32-bit floats to normalised bytes by
+  `scripts/compact-character-glb.mjs`, which cut the three models from 11.5 MB
+  to 9.2 MB without altering geometry, skeletons or animation.
 
 The skeleton and source motion references used to author the native animation
 clips embedded directly in each playable GLB are from Mesh2Motion. Mesh2Motion

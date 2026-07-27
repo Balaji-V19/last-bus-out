@@ -169,9 +169,32 @@ export class SurvivalAudio {
   private applyMusicVolume() {
     if (!this.music) return;
     // Squared so the bed gets out of the way early rather than lingering at
-    // half level through the part that matters.
-    const ducked = this.musicBaseVolume * (1 - this.musicDuck) ** 2;
+    // half level through the part that matters — but floored, so it never
+    // reaches silence. With wandering infected the duck engages often, and a
+    // score that cuts to nothing reads as the audio having failed rather than
+    // as a mix decision.
+    const duck = (1 - this.musicDuck) ** 2;
+    const ducked = this.musicBaseVolume * (0.3 + 0.7 * duck);
     this.music.audio.volume = clamp(ducked, 0, 1);
+  }
+
+  /**
+   * Nudge the audio back to life.
+   *
+   * Two things stop it on their own: browsers suspend an AudioContext that has
+   * been idle or whose tab lost focus, and they pause media elements on the
+   * same events. Neither recovers by itself, which is why sound would go away
+   * mid-session and stay away. Called on a slow clock from the game loop.
+   */
+  keepAlive() {
+    if (!this.enabled) return;
+    if (this.context && this.context.state === "suspended") {
+      void this.context.resume().catch(() => undefined);
+    }
+    const music = this.music?.audio;
+    if (music && music.paused && !music.muted) {
+      void music.play().catch(() => undefined);
+    }
   }
 
   setEnabled(enabled: boolean) {

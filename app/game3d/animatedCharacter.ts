@@ -1794,7 +1794,7 @@ function createOriginalCharacter(style: AnimatedStyle): AnimatedCharacter {
 }
 
 const licensedCharacterLoader = new GLTFLoader();
-const characterAssetRevision = "smooth-finger-rig-20260725";
+const characterAssetRevision = "compact-weights-20260727";
 type LicensedModelSource = {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
@@ -2198,6 +2198,27 @@ async function createLicensedCharacter(
     sharedGeometry: true,
     equippedWeapon: null,
   };
+}
+
+/**
+ * Fetch every character model before play starts.
+ *
+ * Only the hero was awaited before the loading screen cleared. The infected
+ * body is four megabytes and was not requested until the first zombie spawned,
+ * which meant that on anything but a warm cache the enemy existed as an empty
+ * group for several seconds: invisible, but still attacking. That is why
+ * zombies appeared to be missing on the deployed build.
+ *
+ * Failures are swallowed — a model that cannot be fetched falls back to the
+ * procedural character at spawn time, and blocking the loading screen forever
+ * on a bad network would be worse than starting without it.
+ */
+export async function preloadCharacterModels() {
+  await Promise.allSettled([
+    loadLicensedModel("hero"),
+    loadLicensedModel("infected"),
+    loadLicensedModel("maya"),
+  ]);
 }
 
 export async function createAnimatedCharacter(

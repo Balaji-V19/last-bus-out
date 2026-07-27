@@ -9,6 +9,7 @@ import {
 import * as THREE from "three";
 import {
   createAnimatedCharacter,
+  preloadCharacterModels,
   disposeAnimatedCharacter,
   setAnimatedEquipment,
   setCharacterDetail,
@@ -487,18 +488,28 @@ export const GameViewport3D = forwardRef<
     flashlight.target = flashlightTarget;
     playerRoot.add(flashlight, flashlightTarget);
     let hero: AnimatedCharacter | null = null;
-    void createAnimatedCharacter("hero").then((character) => {
-      if (disposed) {
-        disposeAnimatedCharacter(character);
-        return;
-      }
-      hero = character;
-      setAnimatedEquipment(character, propsRef.current.inventory);
-      playerRoot.add(character.root);
-      requestAnimationFrame(() => {
+    // Every character model is fetched before the loading screen clears, not
+    // just the hero. The infected body is the one the player meets first and
+    // it was previously requested only when a zombie spawned, so on a cold
+    // cache the enemy was an invisible empty group for several seconds.
+    void preloadCharacterModels()
+      .then(() => createAnimatedCharacter("hero"))
+      .then((character) => {
+        if (disposed) {
+          disposeAnimatedCharacter(character);
+          return;
+        }
+        hero = character;
+        setAnimatedEquipment(character, propsRef.current.inventory);
+        playerRoot.add(character.root);
+        requestAnimationFrame(() => {
+          if (!disposed) propsRef.current.onReady();
+        });
+      })
+      .catch(() => {
+        // Never leave the player stuck on the loading screen.
         if (!disposed) propsRef.current.onReady();
       });
-    });
 
     let maya: CompanionActor | null = null;
     let mayaLoading = false;
