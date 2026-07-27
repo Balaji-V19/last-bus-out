@@ -43,6 +43,10 @@ export type AnimatedCharacter = {
   weaponNodes: THREE.Object3D[];
   rig: CharacterRig;
   elapsed: number;
+  /** Per-actor phase offset, so a crowd never twitches or beats in unison. */
+  twitchSeed: number;
+  /** Which way this one snaps its head. */
+  twitchDirection: number;
   stateTime: number;
   state: AnimationState;
   flashMaterials: THREE.MeshStandardMaterial[];
@@ -1520,6 +1524,8 @@ function createOriginalCharacter(style: AnimatedStyle): AnimatedCharacter {
       rightAnkle: rightLeg.ankle,
     },
     elapsed: Math.random() * 5,
+    twitchSeed: Math.random() * 7,
+    twitchDirection: Math.random() > 0.5 ? 1 : -1,
     stateTime: 0,
     state: "idle",
     flashMaterials: [...flashMaterialSet],
@@ -1692,47 +1698,90 @@ function assetRig(model: THREE.Object3D): CharacterRig {
   };
 }
 
+/**
+ * Growths bound to the skeleton.
+ *
+ * These were faceted icosahedron balls parented to the model root, so they hung
+ * rigidly in mid-air while the body animated underneath — the "round red
+ * object" that read as a prop stuck to a person. They are now attached to
+ * actual bones, so they move with the tissue they are supposed to be part of,
+ * and the geometry is displaced per vertex rather than being a low-poly ball.
+ *
+ * Placement is deliberately sparse. Infection and infestation rate higher on
+ * pathogen disgust than exposed viscera does, and a few tumours reading
+ * clearly beats a body covered in lumps.
+ */
 function addAssetMutationGrowths(
-  model: THREE.Group,
+  rig: CharacterRig,
   style: "runner" | "heavy",
+  seed: number,
 ) {
-  const group = new THREE.Group();
-  group.name = style === "heavy" ? "MutationGrowths_Heavy" : "MutationGrowths_Runner";
-  const tissue = new THREE.MeshStandardMaterial({
-    color: style === "heavy" ? 0x4c342d : 0x4a2826,
-    roughness: 0.88,
+  // Very dark, wet red. Bright red albedo reads as paint: blood is optically
+  // near-opaque, so its colour comes from a thin surface layer and a specular
+  // highlight, not from a light body colour.
+  const tissue = new THREE.MeshPhysicalMaterial({
+    color: style === "heavy" ? 0x3a1512 : 0x38100e,
+    roughness: 0.42,
     metalness: 0,
-    emissive: style === "heavy" ? 0x210904 : 0x150302,
-    emissiveIntensity: 0.18,
+    // Water's refractive index, which gives the wet sheen for free rather than
+    // through an extra clearcoat lobe.
+    ior: 1.333,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.3,
+    emissive: 0x120302,
+    emissiveIntensity: 0.1,
   });
-  tissue.name = "OriginalMutationTissue";
-  const nodes =
+  tissue.name = "MutationTissue";
+
+  // [bone, forward offset, up offset, side offset, radius]
+  const placements: Array<[keyof CharacterRig, number, number, number, number]> =
     style === "heavy"
       ? [
-          [-0.33, 1.46, 0.04, 0.17, 1.12, 0.82],
-          [-0.25, 1.28, -0.11, 0.13, 0.85, 1.06],
-          [0.31, 1.18, 0.03, 0.12, 1.18, 0.78],
-          [0.18, 0.95, -0.13, 0.09, 0.82, 1.2],
-          [-0.13, 1.62, 0.08, 0.095, 0.9, 0.76],
+          ["chest", 0.04, 0.06, 0.09, 0.11],
+          ["chest", -0.05, 0.02, -0.1, 0.085],
+          ["leftShoulder", 0.02, 0.05, 0.03, 0.075],
+          ["neck", 0.03, 0.02, -0.05, 0.06],
         ]
       : [
-          [0.28, 1.42, 0.02, 0.105, 1.08, 0.72],
-          [0.23, 1.24, -0.1, 0.075, 0.78, 1.16],
-          [-0.2, 1.05, 0.07, 0.065, 1.15, 0.82],
+          ["chest", 0.03, 0.04, 0.08, 0.07],
+          ["rightShoulder", 0.02, 0.04, 0.02, 0.055],
+          ["torso", -0.03, 0.03, -0.07, 0.05],
         ];
-  for (let index = 0; index < nodes.length; index += 1) {
-    const [x, y, z, radius, scaleY, scaleZ] = nodes[index];
-    const geometry = new THREE.IcosahedronGeometry(radius, 1);
+
+  let noise = seed >>> 0 || 1;
+  const random = () => {
+    noise = (noise * 1664525 + 1013904223) >>> 0;
+    return noise / 4294967296;
+  };
+
+  for (let index = 0; index < placements.length; index += 1) {
+    const [boneName, forward, up, side, radius] = placements[index];
+    const bone = rig[boneName];
+    const geometry = new THREE.SphereGeometry(radius, 12, 9);
+    // Push each vertex out by a varying amount so the surface is lumpen rather
+    // than a sphere with visible facets.
+    const position = geometry.attributes.position;
+    for (let vertex = 0; vertex < position.count; vertex += 1) {
+      const x = position.getX(vertex);
+      const y = position.getY(vertex);
+      const z = position.getZ(vertex);
+      const wobble =
+        1 +
+        0.34 * Math.sin(x * 26 + index) +
+        0.22 * Math.sin(y * 31 + index * 2) +
+        0.26 * Math.sin(z * 21 + index * 3) +
+        0.12 * (random() - 0.5);
+      position.setXYZ(vertex, x * wobble, y * wobble * 1.2, z * wobble);
+    }
+    geometry.computeVertexNormals();
+
     const growth = new THREE.Mesh(geometry, tissue);
     growth.name = `MutationNodule_${index + 1}`;
-    growth.position.set(x, y, z);
-    growth.scale.set(1 + index * 0.035, scaleY, scaleZ);
-    growth.rotation.set(index * 0.41, index * 0.73, index * 0.29);
+    growth.position.set(side, up, forward);
     growth.castShadow = true;
     growth.userData.ownedGeometry = true;
-    group.add(growth);
+    bone.add(growth);
   }
-  model.add(group);
 }
 
 async function createLicensedCharacter(
@@ -1757,9 +1806,9 @@ async function createLicensedCharacter(
       : style === "maya"
         ? 1.76
         : style === "runner"
-          ? 1.82
+          ? 1.74
           : style === "heavy"
-            ? 2.02
+            ? 2.12
             : 1.84;
   const initialBounds = new THREE.Box3().setFromObject(assetScene);
   const naturalHeight = Math.max(
@@ -1773,11 +1822,23 @@ async function createLicensedCharacter(
   assetScene.rotation.y = Math.PI;
 
   if (style === "runner") {
-    assetScene.scale.x *= 0.94;
-    assetScene.scale.z *= 0.94;
+    // Narrower than a person as well as shorter. A thing that is smaller and
+    // faster is more alarming than a scaled-down copy of the same body.
+    assetScene.scale.x *= 0.88;
+    assetScene.scale.z *= 0.86;
   } else if (style === "heavy") {
-    assetScene.scale.x *= 1.14;
-    assetScene.scale.z *= 1.1;
+    assetScene.scale.x *= 1.2;
+    assetScene.scale.z *= 1.14;
+  } else if (style === "walker") {
+    assetScene.scale.x *= 0.97;
+    assetScene.scale.z *= 0.95;
+  }
+
+  // A few per cent of per-actor variation in overall size. Ratio distortions
+  // carry the species read; this only stops a group looking like copies.
+  if (style === "walker" || style === "runner" || style === "heavy") {
+    const spread = 0.94 + Math.random() * 0.12;
+    assetScene.scale.multiplyScalar(spread);
   }
 
   const flashMaterialSet = new Set<THREE.MeshStandardMaterial>();
@@ -1792,14 +1853,66 @@ async function createLicensedCharacter(
       ? object.material
       : [object.material];
     const clonedMaterials = sourceMaterials.map((sourceMaterial) => {
-      const material = sourceMaterial.clone();
+      const infectedStyle =
+        style === "walker" || style === "runner" || style === "heavy";
+      const sourceIsSkin =
+        sourceMaterial instanceof THREE.Material &&
+        sourceMaterial.name.toLowerCase().includes("skin");
+      // Infected skin is promoted to a physical material so it can carry a
+      // refractive index and a clearcoat lobe. With every other physical
+      // feature left at zero this compiles to little more than the standard
+      // material plus a couple of scalar operations.
+      const material =
+        infectedStyle &&
+        sourceIsSkin &&
+        sourceMaterial instanceof THREE.MeshStandardMaterial
+          ? Object.assign(new THREE.MeshPhysicalMaterial(), {
+              name: sourceMaterial.name,
+              color: sourceMaterial.color.clone(),
+              map: sourceMaterial.map,
+              normalMap: sourceMaterial.normalMap,
+              roughness: sourceMaterial.roughness,
+              metalness: sourceMaterial.metalness,
+              side: sourceMaterial.side,
+            })
+          : sourceMaterial.clone();
       if (material instanceof THREE.MeshStandardMaterial) {
         const materialName = material.name.toLowerCase();
-        if (style === "heavy") {
-          material.color.lerp(new THREE.Color(0x4a5745), 0.24);
-          material.roughness = Math.max(material.roughness, 0.88);
-        } else if (style === "runner") {
-          material.color.lerp(new THREE.Color(0x66544f), 0.16);
+        const isSkin = materialName.includes("skin");
+        if (style === "walker" || style === "runner" || style === "heavy") {
+          // Green-black, not purple. Early decomposition presents as green
+          // discolouration with the superficial veins marbling green-black
+          // over it, and that reads far more diseased than a bruise palette.
+          const necrosis =
+            style === "heavy"
+              ? new THREE.Color(0x46503c)
+              : style === "runner"
+                ? new THREE.Color(0x53553f)
+                : new THREE.Color(0x5a5c46);
+          material.color.lerp(necrosis, isSkin ? 0.5 : 0.26);
+
+          if (isSkin) {
+            // Wet, not merely dark. A darkened surface on its own reads as
+            // dirty; it is the sharp highlight that converts darkening into
+            // wetness, so both are needed. Skin is non-porous and barely
+            // darkens when wet — it mostly just gets glossier.
+            material.roughness = 0.38;
+            material.metalness = 0;
+            if (material instanceof THREE.MeshPhysicalMaterial) {
+              // Blood's refractive index, and a light clearcoat for the film
+              // of moisture sitting on top of it.
+              material.ior = 1.36;
+              material.clearcoat = 0.42;
+              material.clearcoatRoughness = 0.28;
+            }
+            // Wetness is only legible when there is hue variety to saturate;
+            // a single-hue surface is judged dry however it is shaded. The
+            // varied colouring above is what makes this term work at all.
+            material.emissive.setHex(0x0d0503);
+            material.emissiveIntensity = 0.22;
+          } else {
+            material.roughness = Math.max(material.roughness, 0.86);
+          }
         }
         if (
           (style === "runner" || style === "heavy") &&
@@ -1824,7 +1937,7 @@ async function createLicensedCharacter(
   const rig = assetRig(assetScene);
   const weaponNodes: THREE.Object3D[] = [];
   if (style === "runner" || style === "heavy") {
-    addAssetMutationGrowths(assetScene, style);
+    addAssetMutationGrowths(rig, style, Math.floor(Math.random() * 65535) + 1);
   }
   if (style === "hero" || style === "maya") {
     const equipmentMaterials = createMaterials(style);
@@ -1888,6 +2001,8 @@ async function createLicensedCharacter(
     weaponNodes,
     rig,
     elapsed: Math.random() * 5,
+    twitchSeed: Math.random() * 7,
+    twitchDirection: Math.random() > 0.5 ? 1 : -1,
     stateTime: 0,
     state: "idle",
     flashMaterials: [...flashMaterialSet],
@@ -2243,6 +2358,99 @@ function deathPose(character: AnimatedCharacter, delta: number) {
   );
 }
 
+/**
+ * Per-bone shaping that turns one human mesh into three distinct creatures.
+ *
+ * The variants used to differ only by uniform scale and a colour tint, so at
+ * any real distance they were the same silhouette. Silhouette is the only
+ * thing that survives: dark-adapted vision resolves nothing finer than about
+ * 9 cm at 10 m, so texture, wounds and eyes are simply absent at the range
+ * these are usually first seen. Proportion is all that is left.
+ *
+ * The numbers come from the intermembral index — arm length over leg length,
+ * ×100. Humans sit at 72 and the nearest ape at 106, and essentially nothing
+ * alive occupies the band between. Landing a body in that gap is what produces
+ * "wrong, and I cannot say why". Because ratio measures vary far less between
+ * people than overall size does, distorting a ratio by 20% is a far stronger
+ * signal than making something 20% bigger.
+ *
+ * Each variant commits to one idea rather than blending several, on the
+ * principle that a silhouette the viewer can describe in a single clause is
+ * the only kind they can hold onto.
+ */
+type BoneShape = {
+  bone: keyof CharacterRig;
+  /** Multiplied onto whatever the animation set this frame. */
+  scale?: [number, number, number];
+  /** Added to the animated rotation, radians. */
+  rotate?: [number, number, number];
+};
+
+const CREATURE_SHAPES: Record<"walker" | "runner" | "heavy", BoneShape[]> = {
+  // The Bound. Arms pulled in against the ribs and a spine folded past
+  // anything a walking person presents with, so the gait fails on its own and
+  // the thing reads as restrained rather than merely hurt. It also implies
+  // something did the restraining, which puts a second threat off screen.
+  walker: [
+    { bone: "leftShoulder", scale: [0.62, 0.92, 0.62], rotate: [0, 0, 0.5] },
+    { bone: "rightShoulder", scale: [0.62, 0.92, 0.62], rotate: [0, 0, -0.5] },
+    { bone: "leftElbow", scale: [0.7, 0.86, 0.7], rotate: [0, 0, 0.85] },
+    { bone: "rightElbow", scale: [0.7, 0.86, 0.7], rotate: [0, 0, -0.85] },
+    { bone: "torso", rotate: [0.44, 0, 0] },
+    { bone: "chest", rotate: [0.4, 0, 0] },
+    { bone: "neck", rotate: [-0.5, 0, 0.12] },
+    { bone: "head", scale: [0.94, 0.94, 0.94] },
+  ],
+  // The Long-Armed. Arm segments at 1.26 put the intermembral index near 90 —
+  // squarely inside the empty band — with the head carried low and forward so
+  // the reach is the first thing read.
+  runner: [
+    { bone: "leftShoulder", scale: [1.06, 1.26, 1.06] },
+    { bone: "rightShoulder", scale: [1.06, 1.26, 1.06] },
+    { bone: "leftElbow", scale: [1.02, 1.28, 1.02] },
+    { bone: "rightElbow", scale: [1.02, 1.28, 1.02] },
+    { bone: "leftWrist", scale: [1.18, 1.22, 1.18] },
+    { bone: "rightWrist", scale: [1.18, 1.22, 1.18] },
+    { bone: "torso", scale: [0.94, 1.02, 0.9], rotate: [0.2, 0, 0] },
+    { bone: "chest", scale: [0.92, 1, 0.88], rotate: [0.16, 0, 0] },
+    { bone: "neck", rotate: [0.34, 0, 0] },
+    { bone: "head", rotate: [-0.2, 0, 0] },
+  ],
+  // The Swollen. Acromegalic rather than simply large: the extremities, jaw
+  // and brow enlarge while the limb bones stay their normal length, which is
+  // what adult growth-hormone excess actually does. The result is a body whose
+  // proportions are wrong without any part of it being long.
+  heavy: [
+    { bone: "head", scale: [1.2, 1.14, 1.2] },
+    { bone: "jaw", scale: [1.34, 1.3, 1.26] },
+    { bone: "leftWrist", scale: [1.46, 1.4, 1.46] },
+    { bone: "rightWrist", scale: [1.46, 1.4, 1.46] },
+    { bone: "leftAnkle", scale: [1.34, 1.3, 1.34] },
+    { bone: "rightAnkle", scale: [1.34, 1.3, 1.34] },
+    { bone: "chest", scale: [1.2, 1.04, 1.16] },
+    { bone: "torso", scale: [1.14, 1, 1.12], rotate: [0.16, 0, 0] },
+    { bone: "neck", scale: [1.1, 0.72, 1.1], rotate: [0.2, 0, 0] },
+    { bone: "leftShoulder", scale: [1.16, 1, 1.16] },
+    { bone: "rightShoulder", scale: [1.16, 1, 1.16] },
+  ],
+};
+
+/**
+ * A cardiac double-thump rather than a sine.
+ *
+ * A heart is two unequal impulses close together and then a long silence —
+ * roughly three quarters of the cycle is nothing at all, and the pause is what
+ * makes the next beat land. Driving displacement and audio from one curve is
+ * the cheapest "this is alive" signal there is, and unlike anything visual it
+ * still reads at distance in the dark.
+ */
+function cardiacPulse(phase: number) {
+  const cycle = phase - Math.floor(phase);
+  const impulse = (x: number, k: number) =>
+    x <= 0 ? 0 : Math.max(0, k * x * Math.exp(1 - k * x));
+  return impulse(cycle, 22) + 0.55 * impulse(cycle - 0.19, 16);
+}
+
 function applyAssetSecondaryPose(
   character: AnimatedCharacter,
   state: AnimationState,
@@ -2254,22 +2462,59 @@ function applyAssetSecondaryPose(
     character.style === "runner" ||
     character.style === "heavy";
   if (infected) {
+    const style = character.style as "walker" | "runner" | "heavy";
+
+    // Reapplied every frame rather than set once at clone time: every clip in
+    // these models animates scale on all 41 bones, so anything written at
+    // build time is overwritten by the mixer on the very next update.
+    for (const shape of CREATURE_SHAPES[style]) {
+      const bone = character.rig[shape.bone];
+      if (shape.scale) {
+        bone.scale.set(
+          bone.scale.x * shape.scale[0],
+          bone.scale.y * shape.scale[1],
+          bone.scale.z * shape.scale[2],
+        );
+      }
+      if (shape.rotate) {
+        bone.rotateX(shape.rotate[0]);
+        bone.rotateY(shape.rotate[1]);
+        bone.rotateZ(shape.rotate[2]);
+      }
+    }
+
     const pace =
-      character.style === "runner"
-        ? 4.1
-        : character.style === "heavy"
-          ? 1.35
-          : 2.05;
+      style === "runner" ? 4.1 : style === "heavy" ? 1.35 : 2.05;
     const lurch = Math.sin(character.elapsed * pace + character.elapsed * 0.17);
-    const twitch = Math.sin(character.elapsed * 7.7 + character.style.length);
-    character.rig.head.rotateZ(lurch * (character.style === "heavy" ? 0.035 : 0.065));
-    character.rig.head.rotateY(twitch > 0.82 ? twitch * 0.045 : 0);
+    character.rig.head.rotateZ(lurch * (style === "heavy" ? 0.035 : 0.065));
     character.rig.chest.rotateZ(
       lurch * (state === "walk" || state === "run" ? 0.045 : 0.018),
     );
+
+    // Twitch. Held perfectly still and then snapping, rather than swaying: an
+    // abrupt discontinuity is what motion perception flags as wrong, whereas a
+    // smooth oscillation just reads as idle animation.
+    const twitchPhase = character.elapsed * 0.63 + character.twitchSeed;
+    const twitchWindow = twitchPhase - Math.floor(twitchPhase);
+    if (twitchWindow < 0.09) {
+      const snap = 1 - twitchWindow / 0.09;
+      character.rig.head.rotateY(snap * snap * character.twitchDirection * 0.5);
+      character.rig.neck.rotateZ(snap * 0.12 * character.twitchDirection);
+    }
+
+    // Heartbeat, faster and arrhythmic on the runner so the rhythm itself is
+    // audibly not a human one.
+    const beatsPerSecond = style === "runner" ? 2.6 : style === "heavy" ? 1.1 : 1.5;
+    const pulse = cardiacPulse(
+      character.elapsed * beatsPerSecond + character.twitchSeed,
+    );
+    const swell = 1 + pulse * (style === "heavy" ? 0.05 : 0.03);
+    character.rig.chest.scale.multiplyScalar(swell);
+    character.rig.torso.scale.multiplyScalar(1 + pulse * 0.018);
+
     if (state === "walk" || state === "run") {
       character.rig.torso.rotateX(
-        character.style === "runner" ? 0.08 : character.style === "walker" ? 0.045 : 0.025,
+        style === "runner" ? 0.08 : style === "walker" ? 0.045 : 0.025,
       );
     }
     return;
