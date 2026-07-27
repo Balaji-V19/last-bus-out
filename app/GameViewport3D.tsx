@@ -28,6 +28,7 @@ import {
   flowDirection,
   gridAllows,
   gridSees,
+  openDoorCells,
   type BuiltWorld,
   type EquipmentKind,
   type GameChapter,
@@ -75,6 +76,8 @@ type GameViewportProps = {
   onWaveWarning: (wave: number, seconds: number) => void;
   /** Distance to the nearest living enemy, or Infinity. Throttled. */
   onThreatProximity: (distance: number) => void;
+  /** Whether the player is holding aim, so the HUD can show the mark. */
+  onAimChange: (aiming: boolean) => void;
   onSound: (event: GameSoundEvent, options?: GameSoundOptions) => void;
 };
 
@@ -136,6 +139,14 @@ type EnemyActor = {
   dying: boolean;
   /** Seconds spent unable to advance, used to break out of a wall wedge. */
   stuckClock: number;
+  /** How many gashes this one is already carrying. */
+  wounds: number;
+  /** Per-kill death variation, so no two go down the same way. */
+  deathSpin: number;
+  deathTopple: number;
+  deathLean: number;
+  deathRate: number;
+  deathCollapse: boolean;
   /** Whether the windup cue has fired for the pending swing. */
   telegraphed: boolean;
   /** Countdown to the next proximity breath cue. */
@@ -547,6 +558,9 @@ export const GameViewport3D = forwardRef<
     let kickYaw = 0;
     let lastStrideSign = 1;
     let sprinting = false;
+    /** Holding aim: tightens the shot and shows the reticle. */
+    let aiming = false;
+    let aimReported = false;
     let exertion = 0;
     let exertionClock = 0;
     let dragPointer: { id: number; x: number; y: number } | null = null;
@@ -893,6 +907,62 @@ export const GameViewport3D = forwardRef<
       }
     };
 
+    /**
+     * A wound left where a blow actually landed.
+     *
+     * Hits used to leave nothing on the body — the same spray every time and no
+     * trace afterwards, so a zombie you had buried an axe in twice looked
+     * exactly like one you had not touched. The gash is parented to the bone
+     * nearest the impact, so it moves with the tissue and stays where it was
+     * cut.
+     */
+    const gashGeometry = new THREE.PlaneGeometry(1, 1);
+    const gashMaterial = new THREE.MeshBasicMaterial({
+      color: 0x2a0705,
+      transparent: true,
+      opacity: 0.94,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const openWound = (enemy: EnemyActor, direction: THREE.Vector3, heavy: boolean) => {
+      const rig = enemy.character?.rig;
+      if (!rig) return;
+      // Roughly where the swing arrived: high blows land on the head and
+      // shoulders, most on the chest, low ones on the legs.
+      const roll = Math.random();
+      const bone =
+        roll > 0.86
+          ? rig.head
+          : roll > 0.62
+            ? Math.random() > 0.5
+              ? rig.leftShoulder
+              : rig.rightShoulder
+            : roll > 0.22
+              ? rig.chest
+              : rig.torso;
+      // Cap it, so a long fight cannot bury an actor under decals.
+      if ((enemy.wounds ?? 0) >= 5) return;
+      enemy.wounds = (enemy.wounds ?? 0) + 1;
+
+      const gash = new THREE.Mesh(gashGeometry, gashMaterial);
+      const length = (heavy ? 0.3 : 0.19) * (0.75 + Math.random() * 0.6);
+      gash.scale.set(length, length * (0.16 + Math.random() * 0.14), 1);
+      // Sit just proud of the body so it does not z-fight with the skin.
+      gash.position.set(
+        (Math.random() - 0.5) * 0.11,
+        (Math.random() - 0.5) * 0.16,
+        0.055 + Math.random() * 0.02,
+      );
+      // Angled with the swing that made it, so a cut looks like it was cut
+      // rather than stamped on.
+      gash.rotation.z =
+        Math.atan2(direction.y, direction.x) + (Math.random() - 0.5) * 1.5;
+      gash.renderOrder = 6;
+      gash.userData.ownedGeometry = false;
+      bone.add(gash);
+    };
+
     const spawnBloodDecal = (position: THREE.Vector3) => {
       if (bloodDecals.length >= 12) return;
       const decal = new THREE.Mesh(
@@ -945,6 +1015,12 @@ export const GameViewport3D = forwardRef<
         deathTimer: 0,
         dying: false,
         stuckClock: 0,
+        wounds: 0,
+        deathSpin: 0,
+        deathTopple: 0,
+        deathLean: 1,
+        deathRate: 1,
+        deathCollapse: false,
         telegraphed: false,
         breathClock: 0.8 + Math.random() * 2.2,
         screamed: false,
@@ -1095,13 +1171,30 @@ export const GameViewport3D = forwardRef<
           intensity: 0.7 + combo * 0.035,
         });
       }
+      openWound(enemy, direction, baseDamage >= 50);
       current.onSound("zombie-hit", {
         intensity: baseDamage >= 50 ? 1.05 : 0.78,
         pan: panFor(enemy.root.position, 0.85),
       });
       if (enemy.hp <= 0) {
         enemy.dying = true;
-        enemy.deathTimer = 1.65;
+        // Every kill used to play the one death clip identically, so the head
+        // turned twice and the body dropped the same way every time. The clip
+        // is the same, but how it plays is not: it is retimed, it starts from a
+        // slightly different point, and the body topples in the direction the
+        // blow actually came from.
+        enemy.deathTimer = 1.45 + Math.random() * 0.6;
+        enemy.deathSpin = (Math.random() - 0.5) * 1.4;
+        // Falling away from the swing, with a little scatter.
+        enemy.deathTopple = Math.atan2(direction.x, direction.z) +
+          (Math.random() - 0.5) * 0.7;
+        enemy.deathLean = 0.85 + Math.random() * 0.5;
+        // A heavier blow drops them harder and faster.
+        enemy.deathRate =
+          (baseDamage >= 50 ? 1.15 : 0.85) + Math.random() * 0.3;
+        // Roughly one in five drops straight down rather than toppling, which
+        // breaks the pattern more than any amount of variation within one.
+        enemy.deathCollapse = Math.random() < 0.22;
         enemy.healthBar.group.visible = false;
         stamina = Math.min(100, stamina + 9);
         combatScore += Math.round(120 * (1 + combo * 0.12));
@@ -1149,22 +1242,53 @@ export const GameViewport3D = forwardRef<
       gunRecoil = 0.36;
       current.onAmmoUsed();
       current.onSound("gunshot");
-      const heroForward = new THREE.Vector3(0, 0, -1).applyQuaternion(
-        playerRoot.quaternion,
-      );
+      // Fire where the player is looking rather than at whoever is nearest.
+      // The old version auto-aimed inside a wide cone, which is why pressing G
+      // felt like it fired itself.
+      const heroForward = new THREE.Vector3();
+      camera.getWorldDirection(heroForward);
+      const muzzle = camera.position.clone();
+
+      // Unaimed fire is a spray; aiming down the sights tightens it right up.
+      // That is the whole reason to hold aim.
+      const acceptance = aiming ? 0.995 : 0.955;
       let target: EnemyActor | null = null;
       let bestTargetScore = -Infinity;
+      let headshot = false;
       for (const enemy of enemies) {
         if (enemy.dying) continue;
-        const offset = enemy.root.position.clone().sub(playerRoot.position);
+        const offset = enemy.root.position
+          .clone()
+          .add(new THREE.Vector3(0, 1.05, 0))
+          .sub(muzzle);
         const distance = offset.length();
-        if (distance > 28 || distance < 1.2) continue;
+        if (distance > 30 || distance < 0.8) continue;
         const aim = heroForward.dot(offset.normalize());
-        if (aim < 0.72) continue;
+        if (aim < acceptance) continue;
+        // Blocked by a wall? Then it is not a shot.
+        if (
+          world.grid &&
+          !gridSees(
+            world.grid,
+            playerRoot.position.x,
+            playerRoot.position.z,
+            enemy.root.position.x,
+            enemy.root.position.z,
+          )
+        ) {
+          continue;
+        }
         const targetScore = aim * 2.2 - distance / 38;
         if (targetScore > bestTargetScore) {
           bestTargetScore = targetScore;
           target = enemy;
+          // Whether the ray passes through the head rather than the chest.
+          const headOffset = enemy.root.position
+            .clone()
+            .add(new THREE.Vector3(0, enemy.character?.height ?? 1.8, 0))
+            .sub(muzzle)
+            .normalize();
+          headshot = heroForward.dot(headOffset) > (aiming ? 0.997 : 0.9925);
         }
       }
 
@@ -1177,8 +1301,18 @@ export const GameViewport3D = forwardRef<
           .sub(playerRoot.position)
           .normalize();
         spawnShotEffect(targetPoint);
-        const critical = bestTargetScore > 1.72;
-        damageEnemy(target, critical ? 82 : 48, direction, critical ? 20 : 13, 0.28);
+        // A head shot is a kill on anything but a heavy, which is what makes
+        // aiming worth the time it costs.
+        damageEnemy(
+          target,
+          headshot ? 140 : 46,
+          direction,
+          headshot ? 26 : 13,
+          0.28,
+        );
+        if (headshot) {
+          current.onSound("axe-flesh", { intensity: 1 });
+        }
       } else {
         spawnShotEffect(
           playerRoot.position
@@ -1272,7 +1406,29 @@ export const GameViewport3D = forwardRef<
       if (result instanceof Promise) result.catch(() => undefined);
     };
 
+    const contextMenu = (event: Event) => event.preventDefault();
+
+    const setAiming = (next: boolean) => {
+      if (aiming === next) return;
+      aiming = next;
+      if (aimReported !== next) {
+        aimReported = next;
+        propsRef.current.onAimChange(next);
+      }
+    };
+
     const pointerDown = (event: PointerEvent) => {
+      // Right button raises the pistol. Left fires while aiming, so the whole
+      // thing works from the mouse without reaching for a key.
+      if (event.button === 2) {
+        if (propsRef.current.inventory.pistol) setAiming(true);
+        event.preventDefault();
+        return;
+      }
+      if (event.button === 0 && aiming) {
+        performShoot();
+        return;
+      }
       // First person uses pointer lock so the look has no drag boundary. Touch
       // devices have no pointer lock, so they keep drag-look in both modes.
       if (propsRef.current.pov === "first" && !coarsePointer) {
@@ -1318,7 +1474,8 @@ export const GameViewport3D = forwardRef<
         dragPointer.y = event.clientY;
       }
     };
-    const pointerUp = () => {
+    const pointerUp = (event?: PointerEvent) => {
+      if (event && event.button === 2) setAiming(false);
       dragPointer = null;
       renderer.domElement.classList.remove("looking");
     };
@@ -1363,6 +1520,7 @@ export const GameViewport3D = forwardRef<
     renderer.domElement.addEventListener("pointerup", pointerUp);
     renderer.domElement.addEventListener("pointercancel", pointerUp);
     renderer.domElement.addEventListener("wheel", wheel, { passive: true });
+    renderer.domElement.addEventListener("contextmenu", contextMenu);
     document.addEventListener("pointerlockchange", pointerLockChange);
 
     const syncWorldState = (time: number, delta: number) => {
@@ -1665,7 +1823,13 @@ export const GameViewport3D = forwardRef<
         // rather than as running. 1.5 walk against 3.9 sprint is a difference
         // the player can feel. Both stay inside the animation retiming clamp:
         // the walk clip skates above 1.74 m/s and the run clip below 1.72.
+        if (aiming && (!current.inventory.pistol || current.ammo <= 0)) {
+          setAiming(false);
+        }
         let movementSpeed = running ? 3.9 : 1.5;
+        // Braced to shoot: you cannot sprint with the pistol up, and you move
+        // at a careful walk. That cost is what makes aiming a decision.
+        if (aiming) movementSpeed = Math.min(movementSpeed, 1.05);
         if (attack > 0) {
           movementSpeed *= current.inventory.axe ? 0.52 : 0.7;
         }
@@ -1859,8 +2023,33 @@ export const GameViewport3D = forwardRef<
           const enemy = enemies[enemyIndex];
           if (enemy.dying) {
             enemy.deathTimer -= delta;
+            // How far through the fall we are, 0 at the killing blow.
+            const fallen = THREE.MathUtils.clamp(
+              1 - enemy.deathTimer / 1.75,
+              0,
+              1,
+            );
+            const settle = 1 - (1 - fallen) ** 2.4;
+            if (enemy.deathCollapse) {
+              // Legs go: straight down, folding, with a small twist.
+              enemy.root.position.y = -0.42 * settle;
+              enemy.root.rotation.x = 0.34 * settle;
+              enemy.root.rotation.z = enemy.deathSpin * 0.18 * settle;
+            } else {
+              // Topples away from the blow that landed.
+              enemy.root.rotation.x =
+                Math.cos(enemy.deathTopple) * enemy.deathLean * settle;
+              enemy.root.rotation.z =
+                -Math.sin(enemy.deathTopple) * enemy.deathLean * settle;
+              enemy.root.rotation.y += enemy.deathSpin * delta * (1 - settle);
+              enemy.root.position.y = -0.22 * settle;
+            }
             if (enemy.character) {
-              updateAnimatedCharacter(enemy.character, delta, "death");
+              updateAnimatedCharacter(
+                enemy.character,
+                delta * enemy.deathRate,
+                "death",
+              );
             }
             if (enemy.deathTimer <= 0) removeEnemy(enemy);
             continue;
@@ -2539,7 +2728,56 @@ export const GameViewport3D = forwardRef<
           encounterStallClock = 0;
         }
 
-        // Wandering infected, independent of the scripted encounters.
+            // Doors.
+        //
+        // A shut door now blocks, so it has to be opened rather than walked
+        // through. The player pushes one open by walking into it, and the
+        // infected shove through on contact — a door swinging open on its own
+        // is a better warning than any sound, because it means something is
+        // already on the other side.
+        if (world.doors) {
+          for (const door of world.doors) {
+            if (!door.open) {
+              let pushed =
+                door.position.distanceTo(playerRoot.position) < 1.35;
+              if (!pushed) {
+                for (const enemy of livingEnemies) {
+                  if (door.position.distanceTo(enemy.root.position) < 1.3) {
+                    pushed = true;
+                    break;
+                  }
+                }
+              }
+              if (pushed) {
+                door.open = true;
+                if (world.grid) openDoorCells(world.grid, door);
+                // Force the routing field to be rebuilt: a new opening changes
+                // every route through this part of the floor.
+                flowField = null;
+                current.onSound("door-open", {
+                  intensity: 0.9,
+                  pan: panFor(door.position, 0.8),
+                });
+              }
+            }
+            // Swing over about half a second, easing out so it settles rather
+            // than snapping to the stop.
+            const target = door.open ? 1 : 0;
+            if (door.progress !== target) {
+              door.progress = THREE.MathUtils.clamp(
+                door.progress + delta * 1.9 * (target ? 1 : -1),
+                0,
+                1,
+              );
+              const eased = 1 - (1 - door.progress) ** 2.2;
+              for (let leaf = 0; leaf < door.pivots.length; leaf += 1) {
+                door.pivots[leaf].rotation.y = door.swings[leaf] * eased;
+              }
+            }
+          }
+        }
+
+    // Wandering infected, independent of the scripted encounters.
         //
         // Every threat used to arrive on a step change, so once a floor's
         // encounter was cleared it was empty and safe. A slow trickle from
@@ -3001,6 +3239,7 @@ export const GameViewport3D = forwardRef<
       renderer.domElement.removeEventListener("pointerup", pointerUp);
       renderer.domElement.removeEventListener("pointercancel", pointerUp);
       renderer.domElement.removeEventListener("wheel", wheel);
+      renderer.domElement.removeEventListener("contextmenu", contextMenu);
       document.removeEventListener("pointerlockchange", pointerLockChange);
       if (document.pointerLockElement === renderer.domElement) {
         document.exitPointerLock();
@@ -3022,6 +3261,8 @@ export const GameViewport3D = forwardRef<
       bloodGeometry.dispose();
       bloodMaterial.dispose();
       bloodDecalMaterial.dispose();
+      gashGeometry.dispose();
+      gashMaterial.dispose();
       disposeWorld(world);
       renderer.dispose();
       renderer.forceContextLoss();

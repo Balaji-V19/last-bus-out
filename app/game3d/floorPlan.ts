@@ -368,6 +368,54 @@ function openingSpan(room: Room, opening: Opening) {
   };
 }
 
+/**
+ * A door that can actually be opened.
+ *
+ * Closed doors used to be painted walkable, so the player and the infected both
+ * strolled through a shut door as though it were not there. A closed door now
+ * blocks until something opens it, and the leaves swing rather than blinking
+ * out of the way.
+ */
+export type DoorRuntime = {
+  /** Hinge groups, one per leaf. */
+  pivots: THREE.Object3D[];
+  /** Final rotation for each leaf, radians. */
+  swings: number[];
+  /** World position of the middle of the opening. */
+  position: THREE.Vector3;
+  /** Grid rectangle to clear once it is open. */
+  cell: { x0: number; x1: number; z0: number; z1: number };
+  open: boolean;
+  /** 0 shut, 1 fully swung. */
+  progress: number;
+};
+
+/** Marks a door's cells walkable and see-through. */
+export function openDoorCells(grid: OccupancyGrid, door: DoorRuntime) {
+  const columnStart = Math.max(
+    0,
+    Math.floor((door.cell.x0 - grid.originX) / grid.cell),
+  );
+  const columnEnd = Math.min(
+    grid.width - 1,
+    Math.ceil((door.cell.x1 - grid.originX) / grid.cell),
+  );
+  const rowStart = Math.max(
+    0,
+    Math.floor((door.cell.z0 - grid.originZ) / grid.cell),
+  );
+  const rowEnd = Math.min(
+    grid.height - 1,
+    Math.ceil((door.cell.z1 - grid.originZ) / grid.cell),
+  );
+  for (let row = rowStart; row <= rowEnd; row += 1) {
+    for (let column = columnStart; column <= columnEnd; column += 1) {
+      const index = row * grid.width + column;
+      grid.data[index] = (grid.data[index] | WALKABLE) & ~OPAQUE;
+    }
+  }
+}
+
 export type CeilingRect = {
   minX: number;
   maxX: number;
@@ -381,6 +429,8 @@ export type CompiledFloor = {
   grid: OccupancyGrid;
   /** Room footprints with their ceiling heights, for camera clearance. */
   ceilings: CeilingRect[];
+  /** Openable doors. */
+  doors: DoorRuntime[];
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   start: THREE.Vector3;
   /** One legal standing position per room, for spawning out of sight. */
@@ -710,10 +760,13 @@ export function compileFloor(
   // doorway back its full width.
   for (const doorway of doorways) {
     const half = doorway.width / 2 - 0.02;
-    const seeThrough =
+    // A shut door is a wall until something opens it. Previously every doorway
+    // was painted walkable regardless of state, so a closed door stopped
+    // nothing and the player walked through the leaf.
+    const passable =
       doorway.opening.state === "open" || doorway.opening.kind === "arch";
-    const set = WALKABLE | (seeThrough ? 0 : OPAQUE);
-    const clear = seeThrough ? OPAQUE : 0;
+    const set = passable ? WALKABLE : OPAQUE;
+    const clear = passable ? OPAQUE : WALKABLE;
     if (doorway.axis === "alongX") {
       paintRect(
         doorway.centre - half,
@@ -736,6 +789,7 @@ export function compileFloor(
   }
 
   // ---- door assemblies ----------------------------------------------------
+  const doors: DoorRuntime[] = [];
   for (const doorway of doorways) {
     const { opening } = doorway;
     const headHeight = Math.min(HEAD_HEIGHT, doorway.height - 0.1);
@@ -771,6 +825,32 @@ export function compileFloor(
 
     if (opening.kind === "arch") continue;
 
+    const runtime: DoorRuntime = {
+      pivots: [],
+      swings: [],
+      position: new THREE.Vector3(
+        doorway.axis === "alongX" ? doorway.centre : doorway.fixed,
+        1,
+        doorway.axis === "alongX" ? doorway.fixed : doorway.centre,
+      ),
+      cell:
+        doorway.axis === "alongX"
+          ? {
+              x0: doorway.centre - doorway.width / 2 + 0.02,
+              x1: doorway.centre + doorway.width / 2 - 0.02,
+              z0: doorway.fixed - WALL_THICKNESS,
+              z1: doorway.fixed + WALL_THICKNESS,
+            }
+          : {
+              x0: doorway.fixed - WALL_THICKNESS,
+              x1: doorway.fixed + WALL_THICKNESS,
+              z0: doorway.centre - doorway.width / 2 + 0.02,
+              z1: doorway.centre + doorway.width / 2 - 0.02,
+            },
+      open: opening.state === "open",
+      progress: opening.state === "open" ? 1 : 0,
+    };
+
     const leafWidth =
       opening.kind === "double" ? doorway.width / 2 : doorway.width;
     const leaves = opening.kind === "double" ? [-1, 1] : [opening.swing ?? 1];
@@ -783,8 +863,10 @@ export function compileFloor(
       );
       // An open leaf swings back against the wall rather than standing in the
       // doorway; a closed one fills it.
-      pivot.rotation.y =
-        opening.state === "open" ? side * -1.85 : 0;
+      const swing = side * -1.85;
+      pivot.rotation.y = opening.state === "open" ? swing : 0;
+      runtime.pivots.push(pivot);
+      runtime.swings.push(swing);
       frame.add(pivot);
 
       const leaf = new THREE.Group();
@@ -820,6 +902,7 @@ export function compileFloor(
         materials.trim,
       );
     }
+    doors.push(runtime);
   }
 
   // ---- spawn points and room centres -------------------------------------
@@ -854,6 +937,7 @@ export function compileFloor(
   return {
     root,
     grid,
+    doors,
     ceilings,
     bounds: { minX, maxX, minZ, maxZ },
     start,

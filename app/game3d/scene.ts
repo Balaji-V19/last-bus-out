@@ -3,18 +3,20 @@ import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.j
 import {
   compileFloor,
   type CeilingRect,
+  type DoorRuntime,
   type FloorMaterials,
   type FloorPlan,
   type OccupancyGrid,
 } from "./floorPlan";
 import { groundEmergencyPlan, ward2Plan } from "./floors";
 
-export type { OccupancyGrid, CeilingRect } from "./floorPlan";
+export type { OccupancyGrid, CeilingRect, DoorRuntime } from "./floorPlan";
 export {
   gridAllows,
   gridSees,
   computeFlowField,
   flowDirection,
+  openDoorCells,
 } from "./floorPlan";
 
 export type GameChapter =
@@ -56,6 +58,8 @@ export type BuiltWorld = {
   spawnPoints?: Array<{ room: string; position: THREE.Vector3 }>;
   /** Room footprints and ceiling heights, so the camera can stay indoors. */
   ceilings?: CeilingRect[];
+  /** Doors that block until opened. */
+  doors?: DoorRuntime[];
 };
 
 type MaterialSet = {
@@ -1142,6 +1146,7 @@ function beginRoomGraphFloor(
     grid: floor.grid,
     spawnPoints: floor.spawnPoints,
     ceilings: floor.ceilings,
+    doors: floor.doors,
   });
 
   return { root, collisions, interactions, place, at, finish };
@@ -1412,6 +1417,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     grid: floor.grid,
     spawnPoints: floor.spawnPoints,
     ceilings: floor.ceilings,
+    doors: floor.doors,
   };
 }
 

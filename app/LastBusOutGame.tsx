@@ -187,6 +187,7 @@ export function LastBusOutGame() {
   const [soundOn, setSoundOn] = useState(true);
   const [pov, setPov] = useState<PointOfView>("first");
   const [waveAlert, setWaveAlert] = useState(0);
+  const [aiming, setAiming] = useState(false);
   // Held in state rather than a ref so the viewport re-reads it once the canvas
   // mounts; the viewport then draws to it directly, outside React.
   const [minimapCanvas, setMinimapCanvas] = useState<HTMLCanvasElement | null>(
@@ -866,6 +867,7 @@ export function LastBusOutGame() {
             onFearChange={setDread}
             onWaveWarning={handleWaveWarning}
             onThreatProximity={handleThreatProximity}
+            onAimChange={setAiming}
             onSound={playSound}
           />
         </Suspense>
@@ -885,6 +887,12 @@ export function LastBusOutGame() {
       />
       {damagePulse > 0 && <div key={damagePulse} className="damage-flash" />}
       {waveAlert > 0 && <div key={`wave-${waveAlert}`} className="wave-alert" />}
+      {mode === "playing" && aiming && (
+        <div className="aim-mark" aria-hidden="true">
+          <span />
+          <span />
+        </div>
+      )}
 
       {mode !== "menu" && mode !== "ending" && (
         <>

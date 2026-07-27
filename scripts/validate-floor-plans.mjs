@@ -81,6 +81,13 @@ function floodFill(grid, startX, startZ) {
 function validatePlan(name, plan, floorPlan) {
   const compiled = floorPlan.compileFloor(plan, stubMaterials());
   const { grid } = compiled;
+
+  // A closed door blocks the grid until something opens it, so reachability has
+  // to be judged with every door open — the question is whether a room can be
+  // got to at all, not whether it happens to be standing open at build time.
+  for (const door of compiled.doors ?? []) {
+    floorPlan.openDoorCells(grid, door);
+  }
   const { seen, cell, index } = floodFill(grid, compiled.start.x, compiled.start.z);
   const failures = [];
 

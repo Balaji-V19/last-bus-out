@@ -39,7 +39,8 @@ export type GameSoundEvent =
   | "player-breath"
   | "axe-swing"
   | "axe-flesh"
-  | "axe-wall";
+  | "axe-wall"
+  | "door-open";
 
 export type GameSoundOptions = {
   intensity?: number;
@@ -750,6 +751,16 @@ export class SurvivalAudio {
       this.tone(2450, 0.34, 0.05 * intensity, "triangle", pan, 1850, 0.008);
       this.tone(1290, 0.42, 0.036 * intensity, "sine", pan, 940, 0.012);
       this.tone(184, 0.14, 0.05 * intensity, "sine", pan, 96);
+      return;
+    }
+
+    // A hospital fire door: a heavy latch, dry hinges, and the leaf settling.
+    if (event === "door-open") {
+      this.noiseBurst(0.05, 0.09 * intensity, "bandpass", 2400, pan);
+      this.tone(96, 0.14, 0.06 * intensity, "square", pan, 62, 0.01);
+      this.noiseBurst(0.52, 0.055 * intensity, "bandpass", 720, pan, 0.06, 340);
+      this.tone(212, 0.44, 0.03 * intensity, "sawtooth", pan, 150, 0.07);
+      this.tone(74, 0.16, 0.05 * intensity, "sine", pan, 48, 0.5);
       return;
     }
 

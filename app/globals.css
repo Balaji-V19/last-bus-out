@@ -115,6 +115,46 @@ button {
   transition: none;
 }
 
+/* The aiming mark. Shown only while the pistol is raised, so the view stays
+   clean the rest of the time — a permanent crosshair would read as a shooter
+   and would also tell the player where the centre of the screen is at all
+   times, which is information a horror game should charge for. */
+.aim-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 6;
+  width: 26px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  opacity: 0.85;
+  animation: aim-raise 140ms ease-out;
+}
+
+.aim-mark span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 26px;
+  height: 1px;
+  background: rgba(232, 240, 226, 0.92);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
+}
+
+.aim-mark span:first-child {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.aim-mark span:last-child {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+@keyframes aim-raise {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(2.1); }
+  to { opacity: 0.85; transform: translate(-50%, -50%) scale(1); }
+}
+
 /* Wave telegraph. Amber rather than red so it does not read as damage taken,
    and slow enough to feel like a building alarm rather than an impact. */
 .wave-alert {
