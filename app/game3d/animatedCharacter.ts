@@ -1698,91 +1698,6 @@ function assetRig(model: THREE.Object3D): CharacterRig {
   };
 }
 
-/**
- * Growths bound to the skeleton.
- *
- * These were faceted icosahedron balls parented to the model root, so they hung
- * rigidly in mid-air while the body animated underneath — the "round red
- * object" that read as a prop stuck to a person. They are now attached to
- * actual bones, so they move with the tissue they are supposed to be part of,
- * and the geometry is displaced per vertex rather than being a low-poly ball.
- *
- * Placement is deliberately sparse. Infection and infestation rate higher on
- * pathogen disgust than exposed viscera does, and a few tumours reading
- * clearly beats a body covered in lumps.
- */
-function addAssetMutationGrowths(
-  rig: CharacterRig,
-  style: "runner" | "heavy",
-  seed: number,
-) {
-  // Very dark, wet red. Bright red albedo reads as paint: blood is optically
-  // near-opaque, so its colour comes from a thin surface layer and a specular
-  // highlight, not from a light body colour.
-  const tissue = new THREE.MeshPhysicalMaterial({
-    color: style === "heavy" ? 0x3a1512 : 0x38100e,
-    roughness: 0.42,
-    metalness: 0,
-    // Water's refractive index, which gives the wet sheen for free rather than
-    // through an extra clearcoat lobe.
-    ior: 1.333,
-    clearcoat: 0.55,
-    clearcoatRoughness: 0.3,
-    emissive: 0x120302,
-    emissiveIntensity: 0.1,
-  });
-  tissue.name = "MutationTissue";
-
-  // [bone, forward offset, up offset, side offset, radius]
-  const placements: Array<[keyof CharacterRig, number, number, number, number]> =
-    style === "heavy"
-      ? [
-          ["chest", 0.04, 0.06, 0.09, 0.11],
-          ["chest", -0.05, 0.02, -0.1, 0.085],
-          ["leftShoulder", 0.02, 0.05, 0.03, 0.075],
-          ["neck", 0.03, 0.02, -0.05, 0.06],
-        ]
-      : [
-          ["chest", 0.03, 0.04, 0.08, 0.07],
-          ["rightShoulder", 0.02, 0.04, 0.02, 0.055],
-          ["torso", -0.03, 0.03, -0.07, 0.05],
-        ];
-
-  let noise = seed >>> 0 || 1;
-  const random = () => {
-    noise = (noise * 1664525 + 1013904223) >>> 0;
-    return noise / 4294967296;
-  };
-
-  for (let index = 0; index < placements.length; index += 1) {
-    const [boneName, forward, up, side, radius] = placements[index];
-    const bone = rig[boneName];
-    const geometry = new THREE.SphereGeometry(radius, 12, 9);
-    // Push each vertex out by a varying amount so the surface is lumpen rather
-    // than a sphere with visible facets.
-    const position = geometry.attributes.position;
-    for (let vertex = 0; vertex < position.count; vertex += 1) {
-      const x = position.getX(vertex);
-      const y = position.getY(vertex);
-      const z = position.getZ(vertex);
-      const wobble =
-        1 +
-        0.34 * Math.sin(x * 26 + index) +
-        0.22 * Math.sin(y * 31 + index * 2) +
-        0.26 * Math.sin(z * 21 + index * 3) +
-        0.12 * (random() - 0.5);
-      position.setXYZ(vertex, x * wobble, y * wobble * 1.2, z * wobble);
-    }
-    geometry.computeVertexNormals();
-
-    const growth = new THREE.Mesh(geometry, tissue);
-    growth.name = `MutationNodule_${index + 1}`;
-    growth.position.set(side, up, forward);
-    growth.castShadow = true;
-    growth.userData.ownedGeometry = true;
-    bone.add(growth);
-  }
-}
 
 async function createLicensedCharacter(
   style: AnimatedStyle,
@@ -1806,9 +1721,9 @@ async function createLicensedCharacter(
       : style === "maya"
         ? 1.76
         : style === "runner"
-          ? 1.74
+          ? 1.72
           : style === "heavy"
-            ? 2.12
+            ? 1.96
             : 1.84;
   const initialBounds = new THREE.Box3().setFromObject(assetScene);
   const naturalHeight = Math.max(
@@ -1905,11 +1820,11 @@ async function createLicensedCharacter(
               material.clearcoat = 0.42;
               material.clearcoatRoughness = 0.28;
             }
-            // Wetness is only legible when there is hue variety to saturate;
-            // a single-hue surface is judged dry however it is shaded. The
-            // varied colouring above is what makes this term work at all.
-            material.emissive.setHex(0x0d0503);
-            material.emissiveIntensity = 0.22;
+            // No emissive on skin. A corpse does not glow, and lifting the
+            // black point flattens exactly the shadow contrast that makes a
+            // sunken face read as sunken.
+            material.emissive.setHex(0x000000);
+            material.emissiveIntensity = 0;
           } else {
             material.roughness = Math.max(material.roughness, 0.86);
           }
@@ -1918,8 +1833,15 @@ async function createLicensedCharacter(
           (style === "runner" || style === "heavy") &&
           materialName.includes("eye")
         ) {
-          material.emissive.setHex(style === "heavy" ? 0x8f190d : 0x642016);
-          material.emissiveIntensity = style === "heavy" ? 1.15 : 0.72;
+          // Clouded, not glowing. Corneal opacity after death turns the eye
+          // a flat milky grey; a self-lit eye reads as a demon rather than as
+          // a dead person, and it is the one detail that most gives away a
+          // walker as a costume instead of a corpse.
+          material.color.setHex(0xb9b6a6);
+          material.roughness = 0.62;
+          material.metalness = 0;
+          material.emissive.setHex(0x0a0a08);
+          material.emissiveIntensity = 0.06;
         }
         material.userData.baseEmissive = material.emissive.getHex();
         material.userData.baseEmissiveIntensity = material.emissiveIntensity;
@@ -1936,9 +1858,6 @@ async function createLicensedCharacter(
 
   const rig = assetRig(assetScene);
   const weaponNodes: THREE.Object3D[] = [];
-  if (style === "runner" || style === "heavy") {
-    addAssetMutationGrowths(rig, style, Math.floor(Math.random() * 65535) + 1);
-  }
   if (style === "hero" || style === "maya") {
     const equipmentMaterials = createMaterials(style);
     const axe = createAxe(equipmentMaterials);
@@ -2359,97 +2278,77 @@ function deathPose(character: AnimatedCharacter, delta: number) {
 }
 
 /**
- * Per-bone shaping that turns one human mesh into three distinct creatures.
+ * Per-bone shaping for the infected.
  *
- * The variants used to differ only by uniform scale and a colour tint, so at
- * any real distance they were the same silhouette. Silhouette is the only
- * thing that survives: dark-adapted vision resolves nothing finer than about
- * 9 cm at 10 m, so texture, wounds and eyes are simply absent at the range
- * these are usually first seen. Proportion is all that is left.
+ * Deliberately almost entirely rotation. Bone scale propagates down the
+ * hierarchy, so scaling a spine bone scales the arms, neck and head hanging off
+ * it; an earlier version scaled two spine bones and then multiplied a pulse
+ * onto both, which compounded and inflated the whole upper body. Scale is now
+ * used only on leaf bones — hands, feet, jaw — where nothing hangs below.
  *
- * The numbers come from the intermembral index — arm length over leg length,
- * ×100. Humans sit at 72 and the nearest ape at 106, and essentially nothing
- * alive occupies the band between. Landing a body in that gap is what produces
- * "wrong, and I cannot say why". Because ratio measures vary far less between
- * people than overall size does, distorting a ratio by 20% is a far stronger
- * signal than making something 20% bigger.
- *
- * Each variant commits to one idea rather than blending several, on the
- * principle that a silhouette the viewer can describe in a single clause is
- * the only kind they can hold onto.
+ * The reference is a decayed person, not a deformed creature. Walkers read as
+ * human corpses that are still moving: the wrongness is in posture, slackness
+ * and gait rather than in proportion. Everything here is small enough to stay
+ * inside that register.
  */
 type BoneShape = {
   bone: keyof CharacterRig;
-  /** Multiplied onto whatever the animation set this frame. */
-  scale?: [number, number, number];
   /** Added to the animated rotation, radians. */
   rotate?: [number, number, number];
+  /**
+   * Multiplied onto the animated scale. Only safe on bones with no children
+   * that matter — anything on the spine chain inflates everything above it.
+   */
+  leafScale?: [number, number, number];
 };
 
 const CREATURE_SHAPES: Record<"walker" | "runner" | "heavy", BoneShape[]> = {
-  // The Bound. Arms pulled in against the ribs and a spine folded past
-  // anything a walking person presents with, so the gait fails on its own and
-  // the thing reads as restrained rather than merely hurt. It also implies
-  // something did the restraining, which puts a second threat off screen.
+  // Shambling and slack. Head hangs, jaw sits open, one shoulder dropped, and
+  // the arms trail rather than swing.
   walker: [
-    { bone: "leftShoulder", scale: [0.62, 0.92, 0.62], rotate: [0, 0, 0.5] },
-    { bone: "rightShoulder", scale: [0.62, 0.92, 0.62], rotate: [0, 0, -0.5] },
-    { bone: "leftElbow", scale: [0.7, 0.86, 0.7], rotate: [0, 0, 0.85] },
-    { bone: "rightElbow", scale: [0.7, 0.86, 0.7], rotate: [0, 0, -0.85] },
-    { bone: "torso", rotate: [0.44, 0, 0] },
-    { bone: "chest", rotate: [0.4, 0, 0] },
-    { bone: "neck", rotate: [-0.5, 0, 0.12] },
-    { bone: "head", scale: [0.94, 0.94, 0.94] },
+    { bone: "torso", rotate: [0.16, 0, 0.03] },
+    { bone: "chest", rotate: [0.12, 0, -0.05] },
+    { bone: "neck", rotate: [0.26, 0.06, 0.04] },
+    { bone: "head", rotate: [0.1, 0, -0.07] },
+    { bone: "jaw", rotate: [0.34, 0, 0], leafScale: [1, 1.06, 1] },
+    { bone: "leftShoulder", rotate: [0.16, 0, 0.1] },
+    { bone: "rightShoulder", rotate: [0.22, 0, -0.06] },
+    { bone: "leftElbow", rotate: [0.2, 0, 0] },
+    { bone: "rightElbow", rotate: [0.14, 0, 0] },
   ],
-  // The Long-Armed. Arm segments at 1.26 put the intermembral index near 90 —
-  // squarely inside the empty band — with the head carried low and forward so
-  // the reach is the first thing read.
+  // Further gone and further forward: pitched at the waist, head carried low,
+  // arms hanging well in front. Faster, so the posture leads the body.
   runner: [
-    { bone: "leftShoulder", scale: [1.06, 1.26, 1.06] },
-    { bone: "rightShoulder", scale: [1.06, 1.26, 1.06] },
-    { bone: "leftElbow", scale: [1.02, 1.28, 1.02] },
-    { bone: "rightElbow", scale: [1.02, 1.28, 1.02] },
-    { bone: "leftWrist", scale: [1.18, 1.22, 1.18] },
-    { bone: "rightWrist", scale: [1.18, 1.22, 1.18] },
-    { bone: "torso", scale: [0.94, 1.02, 0.9], rotate: [0.2, 0, 0] },
-    { bone: "chest", scale: [0.92, 1, 0.88], rotate: [0.16, 0, 0] },
-    { bone: "neck", rotate: [0.34, 0, 0] },
-    { bone: "head", rotate: [-0.2, 0, 0] },
+    { bone: "torso", rotate: [0.3, 0, -0.04] },
+    { bone: "chest", rotate: [0.2, 0, 0.06] },
+    { bone: "neck", rotate: [0.34, -0.08, 0] },
+    { bone: "head", rotate: [-0.12, 0, 0.05] },
+    { bone: "jaw", rotate: [0.46, 0, 0], leafScale: [1, 1.1, 1] },
+    { bone: "leftShoulder", rotate: [0.42, 0, 0.14] },
+    { bone: "rightShoulder", rotate: [0.4, 0, -0.14] },
+    { bone: "leftElbow", rotate: [0.34, 0, 0] },
+    { bone: "rightElbow", rotate: [0.36, 0, 0] },
+    { bone: "leftWrist", leafScale: [1.06, 1.08, 1.06] },
+    { bone: "rightWrist", leafScale: [1.06, 1.08, 1.06] },
   ],
-  // The Swollen. Acromegalic rather than simply large: the extremities, jaw
-  // and brow enlarge while the limb bones stay their normal length, which is
-  // what adult growth-hormone excess actually does. The result is a body whose
-  // proportions are wrong without any part of it being long.
+  // Bloated rather than muscular: swollen extremities and a heavy forward
+  // lean, carried on the model's own wider scale rather than on bone scale.
   heavy: [
-    { bone: "head", scale: [1.2, 1.14, 1.2] },
-    { bone: "jaw", scale: [1.34, 1.3, 1.26] },
-    { bone: "leftWrist", scale: [1.46, 1.4, 1.46] },
-    { bone: "rightWrist", scale: [1.46, 1.4, 1.46] },
-    { bone: "leftAnkle", scale: [1.34, 1.3, 1.34] },
-    { bone: "rightAnkle", scale: [1.34, 1.3, 1.34] },
-    { bone: "chest", scale: [1.2, 1.04, 1.16] },
-    { bone: "torso", scale: [1.14, 1, 1.12], rotate: [0.16, 0, 0] },
-    { bone: "neck", scale: [1.1, 0.72, 1.1], rotate: [0.2, 0, 0] },
-    { bone: "leftShoulder", scale: [1.16, 1, 1.16] },
-    { bone: "rightShoulder", scale: [1.16, 1, 1.16] },
+    { bone: "torso", rotate: [0.2, 0, 0.05] },
+    { bone: "chest", rotate: [0.1, 0, -0.04] },
+    { bone: "neck", rotate: [0.3, 0.05, 0] },
+    { bone: "head", rotate: [0.06, 0, -0.05] },
+    { bone: "jaw", rotate: [0.28, 0, 0], leafScale: [1.12, 1.1, 1.08] },
+    { bone: "leftShoulder", rotate: [0.24, 0, 0.16] },
+    { bone: "rightShoulder", rotate: [0.24, 0, -0.16] },
+    { bone: "leftElbow", rotate: [0.22, 0, 0] },
+    { bone: "rightElbow", rotate: [0.22, 0, 0] },
+    { bone: "leftWrist", leafScale: [1.24, 1.2, 1.24] },
+    { bone: "rightWrist", leafScale: [1.24, 1.2, 1.24] },
+    { bone: "leftAnkle", leafScale: [1.16, 1.12, 1.16] },
+    { bone: "rightAnkle", leafScale: [1.16, 1.12, 1.16] },
   ],
 };
-
-/**
- * A cardiac double-thump rather than a sine.
- *
- * A heart is two unequal impulses close together and then a long silence —
- * roughly three quarters of the cycle is nothing at all, and the pause is what
- * makes the next beat land. Driving displacement and audio from one curve is
- * the cheapest "this is alive" signal there is, and unlike anything visual it
- * still reads at distance in the dark.
- */
-function cardiacPulse(phase: number) {
-  const cycle = phase - Math.floor(phase);
-  const impulse = (x: number, k: number) =>
-    x <= 0 ? 0 : Math.max(0, k * x * Math.exp(1 - k * x));
-  return impulse(cycle, 22) + 0.55 * impulse(cycle - 0.19, 16);
-}
 
 function applyAssetSecondaryPose(
   character: AnimatedCharacter,
@@ -2465,57 +2364,49 @@ function applyAssetSecondaryPose(
     const style = character.style as "walker" | "runner" | "heavy";
 
     // Reapplied every frame rather than set once at clone time: every clip in
-    // these models animates scale on all 41 bones, so anything written at
-    // build time is overwritten by the mixer on the very next update.
+    // these models animates all 41 bones, so anything written at build time is
+    // overwritten by the mixer on the very next update.
+    //
+    // Rotations are additive and cannot accumulate, because the mixer rewrites
+    // the bone's rotation from the clip first. Scale is only ever applied to
+    // leaf bones, and only as a plain multiply of the freshly written value.
     for (const shape of CREATURE_SHAPES[style]) {
       const bone = character.rig[shape.bone];
-      if (shape.scale) {
-        bone.scale.set(
-          bone.scale.x * shape.scale[0],
-          bone.scale.y * shape.scale[1],
-          bone.scale.z * shape.scale[2],
-        );
-      }
       if (shape.rotate) {
         bone.rotateX(shape.rotate[0]);
         bone.rotateY(shape.rotate[1]);
         bone.rotateZ(shape.rotate[2]);
       }
+      if (shape.leafScale) {
+        bone.scale.set(
+          bone.scale.x * shape.leafScale[0],
+          bone.scale.y * shape.leafScale[1],
+          bone.scale.z * shape.leafScale[2],
+        );
+      }
     }
 
-    const pace =
-      style === "runner" ? 4.1 : style === "heavy" ? 1.35 : 2.05;
-    const lurch = Math.sin(character.elapsed * pace + character.elapsed * 0.17);
-    character.rig.head.rotateZ(lurch * (style === "heavy" ? 0.035 : 0.065));
-    character.rig.chest.rotateZ(
-      lurch * (state === "walk" || state === "run" ? 0.045 : 0.018),
+    // The shamble. Weight rolls side to side on a slow cycle, and the head
+    // lags behind the chest rather than tracking it — dead weight on a slack
+    // neck, which is most of what makes a walker read as a corpse in motion.
+    const moving = state === "walk" || state === "run";
+    const pace = style === "runner" ? 3.4 : style === "heavy" ? 1.1 : 1.7;
+    const roll = Math.sin(character.elapsed * pace + character.twitchSeed);
+    const lag = Math.sin(
+      character.elapsed * pace - 0.9 + character.twitchSeed,
     );
+    character.rig.chest.rotateZ(roll * (moving ? 0.06 : 0.02));
+    character.rig.torso.rotateZ(roll * (moving ? 0.045 : 0.015));
+    character.rig.head.rotateZ(lag * (moving ? 0.11 : 0.05));
+    character.rig.head.rotateX(lag * 0.05);
 
-    // Twitch. Held perfectly still and then snapping, rather than swaying: an
-    // abrupt discontinuity is what motion perception flags as wrong, whereas a
-    // smooth oscillation just reads as idle animation.
-    const twitchPhase = character.elapsed * 0.63 + character.twitchSeed;
-    const twitchWindow = twitchPhase - Math.floor(twitchPhase);
-    if (twitchWindow < 0.09) {
-      const snap = 1 - twitchWindow / 0.09;
-      character.rig.head.rotateY(snap * snap * character.twitchDirection * 0.5);
-      character.rig.neck.rotateZ(snap * 0.12 * character.twitchDirection);
-    }
-
-    // Heartbeat, faster and arrhythmic on the runner so the rhythm itself is
-    // audibly not a human one.
-    const beatsPerSecond = style === "runner" ? 2.6 : style === "heavy" ? 1.1 : 1.5;
-    const pulse = cardiacPulse(
-      character.elapsed * beatsPerSecond + character.twitchSeed,
-    );
-    const swell = 1 + pulse * (style === "heavy" ? 0.05 : 0.03);
-    character.rig.chest.scale.multiplyScalar(swell);
-    character.rig.torso.scale.multiplyScalar(1 + pulse * 0.018);
-
-    if (state === "walk" || state === "run") {
-      character.rig.torso.rotateX(
-        style === "runner" ? 0.08 : style === "walker" ? 0.045 : 0.025,
-      );
+    // An occasional dry, palsied head tic. Brief and infrequent, so it stays a
+    // detail the player catches rather than a constant wobble.
+    const ticPhase = character.elapsed * 0.31 + character.twitchSeed;
+    const ticWindow = ticPhase - Math.floor(ticPhase);
+    if (ticWindow < 0.06) {
+      const snap = 1 - ticWindow / 0.06;
+      character.rig.head.rotateY(snap * snap * character.twitchDirection * 0.16);
     }
     return;
   }
