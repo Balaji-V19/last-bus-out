@@ -445,6 +445,23 @@ button {
 .item-pistol { background-position: 50% 100%; }
 .item-fuel { background-position: 100% 100%; }
 
+/* The key that operates a slot, shown on the slot itself. Carrying something
+   should tell you how to use it without consulting a legend. */
+.slot-key {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  min-width: 12px;
+  padding: 1px 3px;
+  border: 1px solid rgba(214, 224, 208, 0.4);
+  border-radius: 2px;
+  font-size: 8px;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  color: rgba(226, 236, 220, 0.92);
+  background: rgba(12, 18, 14, 0.72);
+}
+
 .equipment-slot small {
   display: block;
   margin-top: -1px;

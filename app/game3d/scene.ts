@@ -2,13 +2,14 @@ import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import {
   compileFloor,
+  type CeilingRect,
   type FloorMaterials,
   type FloorPlan,
   type OccupancyGrid,
 } from "./floorPlan";
 import { groundEmergencyPlan, ward2Plan } from "./floors";
 
-export type { OccupancyGrid } from "./floorPlan";
+export type { OccupancyGrid, CeilingRect } from "./floorPlan";
 export {
   gridAllows,
   gridSees,
@@ -53,6 +54,8 @@ export type BuiltWorld = {
   grid?: OccupancyGrid;
   /** Legal standing positions by room, used to spawn enemies inside real rooms. */
   spawnPoints?: Array<{ room: string; position: THREE.Vector3 }>;
+  /** Room footprints and ceiling heights, so the camera can stay indoors. */
+  ceilings?: CeilingRect[];
 };
 
 type MaterialSet = {
@@ -1138,6 +1141,7 @@ function beginRoomGraphFloor(
     bounds: floor.bounds,
     grid: floor.grid,
     spawnPoints: floor.spawnPoints,
+    ceilings: floor.ceilings,
   });
 
   return { root, collisions, interactions, place, at, finish };
@@ -1407,6 +1411,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     bounds: floor.bounds,
     grid: floor.grid,
     spawnPoints: floor.spawnPoints,
+    ceilings: floor.ceilings,
   };
 }
 

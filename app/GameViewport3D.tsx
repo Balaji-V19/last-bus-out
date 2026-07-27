@@ -535,7 +535,9 @@ export const GameViewport3D = forwardRef<
     // the look direction the moment the player toggles.
     let cameraPitch = 0.2;
     let lookPitch = 0;
-    let cameraDistance = props.chapter === "survival" ? 4.7 : 4.35;
+    // Shorter than before: the rooms are 4-14 m across, so a 4.35 m boom spent
+    // most of its time inside a wall.
+    let cameraDistance = props.chapter === "survival" ? 3.4 : 3.1;
     let bobPhase = 0;
     let bobAmplitude = 0;
     let sprintBlend = 0;
@@ -796,6 +798,8 @@ export const GameViewport3D = forwardRef<
     let flowField: Int32Array | null = null;
     let flowClock = 0;
     let encounterStallClock = 0;
+    /** Countdown to the next wandering spawn. Long, so it stays unsettling. */
+    let roamClock = 30 + Math.random() * 25;
     const flowOrigin = new THREE.Vector3();
     const enemyFlowDirection = new THREE.Vector3();
     let nextEnemyId = 1;
@@ -1324,8 +1328,8 @@ export const GameViewport3D = forwardRef<
       if (propsRef.current.pov === "first") return;
       cameraDistance = THREE.MathUtils.clamp(
         cameraDistance + event.deltaY * 0.004,
-        3.3,
-        7.4,
+        2.1,
+        4.6,
       );
     };
     // Whether this world has ever actually held the pointer. Changing floor
@@ -1469,9 +1473,15 @@ export const GameViewport3D = forwardRef<
         pendingEncounter = () => {
           spawn();
           encounterWasActive = true;
+          // The pack announces itself as it arrives, from somewhere off to one
+          // side, so the player hears roughly where it came from.
+          current.onSound("zombie-scream", {
+            intensity: 1,
+            pan: (Math.random() - 0.5) * 1.4,
+          });
         };
         pendingEncounterClock = warning;
-        current.onSound("wave-warning", { intensity: 0.85 });
+        current.onSound("wave-warning", { intensity: 0.9 });
         current.onWaveWarning(0, warning);
       };
 
@@ -2529,6 +2539,42 @@ export const GameViewport3D = forwardRef<
           encounterStallClock = 0;
         }
 
+        // Wandering infected, independent of the scripted encounters.
+        //
+        // Every threat used to arrive on a step change, so once a floor's
+        // encounter was cleared it was empty and safe. A slow trickle from
+        // random rooms the player cannot currently see means no corridor is
+        // ever reliably clear, and it is the cheapest way to make a floor stop
+        // feeling like a checklist.
+        if (world.spawnPoints && world.spawnPoints.length > 0) {
+          roamClock -= delta;
+          if (roamClock <= 0) {
+            roamClock = 26 + Math.random() * 34;
+            if (livingEnemies.length < 4 && current.chapter !== "survival") {
+              // Only rooms that are out of sight and not on top of the player.
+              const options = world.spawnPoints.filter((entry) => {
+                const range = entry.position.distanceTo(playerRoot.position);
+                if (range < 14 || range > 52) return false;
+                return !isVisibleToPlayer(entry.position.x, entry.position.z);
+              });
+              if (options.length > 0) {
+                const pick =
+                  options[Math.floor(Math.random() * options.length)];
+                const style = Math.random() < 0.22 ? "runner" : "walker";
+                if (canOccupy(world, pick.position.x, pick.position.z, 0.44)) {
+                  spawnEnemy(style, pick.position.x, pick.position.z);
+                  // Heard, never seen arriving: a distant call from the room it
+                  // came from, so the player knows something changed.
+                  current.onSound("zombie-alert", {
+                    intensity: 0.55,
+                    pan: panFor(pick.position, 0.85),
+                  });
+                }
+              }
+            }
+          }
+        }
+
         // Rebuild the routing field when the player has moved far enough that
         // the old one would send enemies to where they used to be.
         if (world.grid) {
@@ -2609,7 +2655,12 @@ export const GameViewport3D = forwardRef<
               current.onSound("wave-imminent", {
                 intensity: Math.min(1.2, 0.8 + survivalWave * 0.03),
               });
-              horrorPulse = Math.max(horrorPulse, 2.2);
+              // Something screams just before the shutters give.
+              current.onSound("zombie-scream", {
+                intensity: 1.1,
+                pan: (Math.random() - 0.5) * 1.5,
+              });
+              horrorPulse = Math.max(horrorPulse, 2.6);
             }
             if (survivalWaveClock <= 0) {
               survivalWave += 1;
@@ -2850,16 +2901,47 @@ export const GameViewport3D = forwardRef<
         cameraTarget
           .copy(playerRoot.position)
           .add(cameraTargetOffset);
-        const horizontalDistance =
-          cameraDistance * Math.cos(cameraPitch);
+
+        // Pull the boom in until it is inside the room. Without this the camera
+        // sat a metre outside the wall of any small room, and at its old height
+        // of 2.86 m it was above the 2.7 m ceilings entirely — which is why
+        // switching to third person looked down on the building from outside.
+        let boom = cameraDistance;
+        if (world.grid) {
+          for (let step = 0; step < 8; step += 1) {
+            const test = boom * (1 - step / 8);
+            const horizontal = test * Math.cos(cameraPitch);
+            const testX = playerRoot.position.x + Math.sin(cameraYaw) * horizontal;
+            const testZ = playerRoot.position.z + Math.cos(cameraYaw) * horizontal;
+            if (canOccupy(world, testX, testZ, 0.3)) {
+              boom = test;
+              break;
+            }
+          }
+        }
+        const horizontalDistance = boom * Math.cos(cameraPitch);
+        const eyeX =
+          playerRoot.position.x + Math.sin(cameraYaw) * horizontalDistance;
+        const eyeZ =
+          playerRoot.position.z + Math.cos(cameraYaw) * horizontalDistance;
+
+        // Stay under whatever ceiling is actually overhead.
+        let headroom = 2.55;
+        if (world.ceilings) {
+          for (const room of world.ceilings) {
+            if (eyeX < room.minX || eyeX > room.maxX) continue;
+            if (eyeZ < room.minZ || eyeZ > room.maxZ) continue;
+            headroom = Math.min(headroom, room.ceiling - 0.22);
+            break;
+          }
+        }
         desiredCamera.set(
-          playerRoot.position.x +
-            Math.sin(cameraYaw) * horizontalDistance,
-          playerRoot.position.y +
-            2.0 +
-            Math.sin(cameraPitch) * cameraDistance,
-          playerRoot.position.z +
-            Math.cos(cameraYaw) * horizontalDistance,
+          eyeX,
+          Math.min(
+            playerRoot.position.y + headroom,
+            playerRoot.position.y + 1.62 + Math.sin(cameraPitch) * boom,
+          ),
+          eyeZ,
         );
         if (cameraShake > 0) {
           desiredCamera.add(

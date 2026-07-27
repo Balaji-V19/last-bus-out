@@ -157,9 +157,13 @@ function infectedSkinTexture(seed: number) {
   // through the face.
   const head = tileAt(0);
   for (const [cx, cy, rx, ry, alpha] of [
-    [0.32, 0.44, 0.13, 0.1, 0.62],
-    [0.68, 0.44, 0.13, 0.1, 0.62],
-    [0.5, 0.72, 0.16, 0.09, 0.4],
+    // Sockets pushed deeper and wider than a living face could be: the eye is
+    // the first thing read on anything approaching, and a skull showing
+    // through there does more than any amount of blood elsewhere.
+    [0.32, 0.44, 0.155, 0.125, 0.86],
+    [0.68, 0.44, 0.155, 0.125, 0.86],
+    // The mouth, dark and open.
+    [0.5, 0.73, 0.185, 0.11, 0.66],
   ] as const) {
     const gradient = context.createRadialGradient(
       head + cx * tile,
@@ -169,9 +173,9 @@ function infectedSkinTexture(seed: number) {
       cy * tile,
       Math.max(rx, ry) * tile,
     );
-    gradient.addColorStop(0, `rgba(26, 20, 20, ${alpha})`);
-    gradient.addColorStop(0.6, `rgba(42, 34, 32, ${alpha * 0.5})`);
-    gradient.addColorStop(1, "rgba(60, 52, 48, 0)");
+    gradient.addColorStop(0, `rgba(12, 9, 9, ${alpha})`);
+    gradient.addColorStop(0.55, `rgba(30, 24, 22, ${alpha * 0.62})`);
+    gradient.addColorStop(1, "rgba(56, 48, 44, 0)");
     context.save();
     context.translate(head + cx * tile, cy * tile);
     context.scale(1, ry / rx);
@@ -182,7 +186,7 @@ function infectedSkinTexture(seed: number) {
     context.restore();
   }
   // Hollow the cheeks and temples so the skull reads under the skin.
-  for (const cx of [0.2, 0.8, 0.28, 0.72]) {
+  for (const cx of [0.17, 0.83, 0.26, 0.74]) {
     const gradient = context.createRadialGradient(
       head + cx * tile,
       0.58 * tile,
@@ -191,10 +195,21 @@ function infectedSkinTexture(seed: number) {
       0.58 * tile,
       0.14 * tile,
     );
-    gradient.addColorStop(0, "rgba(78, 70, 66, 0.36)");
-    gradient.addColorStop(1, "rgba(78, 70, 66, 0)");
+    gradient.addColorStop(0, "rgba(58, 52, 48, 0.5)");
+    gradient.addColorStop(1, "rgba(58, 52, 48, 0)");
     context.fillStyle = gradient;
     context.fillRect(head, 0, tile, tile);
+  }
+
+  // A pale band inside the dark mouth. Without it the mouth reads as a hole;
+  // with it, it reads as bared teeth.
+  {
+    const gradient = context.createLinearGradient(0, 0.7 * tile, 0, 0.76 * tile);
+    gradient.addColorStop(0, "rgba(198, 190, 172, 0)");
+    gradient.addColorStop(0.5, "rgba(198, 190, 172, 0.5)");
+    gradient.addColorStop(1, "rgba(198, 190, 172, 0)");
+    context.fillStyle = gradient;
+    context.fillRect(head + 0.38 * tile, 0.7 * tile, 0.24 * tile, 0.06 * tile);
   }
 
   // Veins, drawn as branching dark lines rather than as a noise field. Real

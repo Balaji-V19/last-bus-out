@@ -397,7 +397,7 @@ export function LastBusOutGame() {
     playSound("heal");
   }, [medicine, playSound, showToast]);
 
-  const useAntiviral = useCallback(() => {
+  const injectAntiviral = useCallback(() => {
     if (antivirals <= 0 || infectionRef.current <= 0) return;
     setAntivirals((value) => Math.max(0, value - 1));
     const nextInfection = clamp(infectionRef.current - 38, 0, 100);
@@ -413,13 +413,13 @@ export function LastBusOutGame() {
       if (chapter === "hospital") {
         if (id === "torch" && step === 0) {
           advanceStep(1);
-          showToast("Torch mounted to your belt");
+          showToast("Torch on your belt · it lights whatever you look at");
         } else if (id === "radio" && step === 1) {
           advanceStep(2);
           showToast("A survivor is calling from Floor 2");
         } else if (id === "axe" && step === 2) {
           advanceStep(3);
-          showToast("Fire axe secured · movement ahead");
+          showToast("Fire axe secured · press F to swing it");
         } else if (id === "breaker" && step === 4) {
           advanceStep(5);
           showToast("Stairwell power restored · something heard the breaker");
@@ -443,7 +443,7 @@ export function LastBusOutGame() {
         } else if (id === "pistol" && !hasPistol) {
           setHasPistol(true);
           setAmmo(12);
-          showToast("Service pistol recovered · 12 rounds");
+          showToast("Service pistol recovered · press G to fire · 12 rounds");
         } else if (id === "bike" && step >= 3) {
           loadChapter("station");
         }
@@ -460,7 +460,7 @@ export function LastBusOutGame() {
           setAntivirals((value) => value + 2);
           setMedicine((value) => Math.min(3, value + 1));
           advanceStep(3);
-          showToast("Two antiviral doses and one trauma kit recovered");
+          showToast("Antivirals and a trauma kit · press 1 to heal, 2 to inject");
         } else if (id === "bike" && step >= 4) {
           setPower(100);
           loadChapter("checkpoint");
@@ -516,7 +516,7 @@ export function LastBusOutGame() {
       setDamagePulse((value) => value + 1);
       if (next <= 0) {
         setMode("paused");
-        showToast("You collapsed · use a trauma kit or restart");
+        showToast("You collapsed · press 1 for a trauma kit, or restart");
       }
     },
     [setMode, showToast],
@@ -531,7 +531,7 @@ export function LastBusOutGame() {
         setMode("paused");
         showToast("The infection took over · restart from the emergency floor");
       } else if (next >= 72 && infectionRef.current - amount < 72) {
-        showToast("Critical infection · use an antiviral dose");
+        showToast("Critical infection · press 2 to inject an antiviral");
       }
     },
     [showToast],
@@ -544,10 +544,10 @@ export function LastBusOutGame() {
     if (nextKills % 4 !== 0) return;
     if (hasPistol) {
       setAmmo((value) => value + 4);
-      showToast("Infected cache · 4 pistol rounds recovered");
+      showToast("Infected cache · 4 pistol rounds · G to fire");
     } else {
       setMedicine((value) => Math.min(3, value + 1));
-      showToast("Infected cache · trauma supplies recovered");
+      showToast("Infected cache · trauma supplies · 1 to use");
     }
     playSound("pickup");
   }, [hasPistol, playSound, showToast]);
@@ -669,13 +669,20 @@ export function LastBusOutGame() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (mode === "playing") setMode("paused");
-      else if (mode === "paused") resumePlay();
+      if (event.key === "Escape") {
+        if (mode === "playing") setMode("paused");
+        else if (mode === "paused") resumePlay();
+        return;
+      }
+      if (mode !== "playing") return;
+      // Consumables were click-only, which is unusable in first person with the
+      // pointer locked — there is no cursor to click with.
+      if (event.key === "1") healWithMedicine();
+      if (event.key === "2") injectAntiviral();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mode, resumePlay]);
+  }, [healWithMedicine, mode, resumePlay, injectAntiviral]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setHasSave(Boolean(getSave())), 0);
@@ -958,9 +965,10 @@ export function LastBusOutGame() {
             </div>
             <div className="equipment-tray" aria-label="Physical equipment carried by the character">
               {inventory.axe && (
-                <div className="equipment-slot selected" title="Fire axe mounted to backpack">
+                <div className="equipment-slot selected" title="Fire axe · press F to swing">
                   <span className="equipment-icon item-axe" aria-hidden="true" />
                   <small>Axe</small>
+                  <span className="slot-key">F</span>
                 </div>
               )}
               {inventory.radio && (
@@ -979,26 +987,32 @@ export function LastBusOutGame() {
                 <button
                   className="equipment-slot actionable"
                   onClick={healWithMedicine}
-                  title="Use trauma kit"
+                  title="Trauma kit · press 1 to use"
                 >
                   <span className="equipment-icon item-medkit" aria-hidden="true" />
                   <small>Med {medicine}</small>
+                  <span className="slot-key">1</span>
                 </button>
               )}
               {antivirals > 0 && (
                 <button
                   className="equipment-slot actionable antiviral-slot"
-                  onClick={useAntiviral}
-                  title="Inject an antiviral dose to suppress infection"
+                  onClick={injectAntiviral}
+                  title="Antiviral dose · press 2 to inject"
                 >
                   <span className="equipment-icon item-antiviral" aria-hidden="true" />
                   <small>Anti {antivirals}</small>
+                  <span className="slot-key">2</span>
                 </button>
               )}
               {inventory.pistol && (
-                <div className="equipment-slot" title="Holstered service pistol">
+                <div
+                  className={`equipment-slot ${ammo > 0 ? "actionable" : ""}`}
+                  title="Service pistol · press G to fire"
+                >
                   <span className="equipment-icon item-pistol" aria-hidden="true" />
                   <small>{ammo} rnd</small>
+                  <span className="slot-key">G</span>
                 </div>
               )}
               {inventory.fuel && (
@@ -1018,8 +1032,10 @@ export function LastBusOutGame() {
           <div className="look-hint">
             {pov === "first" ? "Click to look" : "Drag to look"} · V for{" "}
             {pov === "first" ? "third person" : "first person"} · Shift to run ·
-            F melee
+            F axe
             {inventory.pistol ? " · G pistol" : ""}
+            {inventory.medkit ? " · 1 trauma kit" : ""}
+            {antivirals > 0 ? " · 2 antiviral" : ""}
           </div>
 
           {prompt && (
@@ -1149,8 +1165,10 @@ export function LastBusOutGame() {
               <span>Shift · Run</span>
               <span>Mouse · Look</span>
               <span>V · Perspective</span>
-              <span>F · Attack</span>
-              <span>G · Fire pistol</span>
+              <span>F · Axe</span>
+              <span>G · Pistol</span>
+              <span>1 · Trauma kit</span>
+              <span>2 · Antiviral</span>
               <span>E · Interact</span>
               <span>Space · Dodge</span>
             </div>
@@ -1198,7 +1216,7 @@ export function LastBusOutGame() {
                 </button>
               )}
               {antivirals > 0 && infection > 0 && infection < 100 && (
-                <button className="secondary-button" onClick={useAntiviral}>
+                <button className="secondary-button" onClick={injectAntiviral}>
                   Use antiviral · {antivirals} left
                 </button>
               )}

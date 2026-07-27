@@ -368,9 +368,19 @@ function openingSpan(room: Room, opening: Opening) {
   };
 }
 
+export type CeilingRect = {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  ceiling: number;
+};
+
 export type CompiledFloor = {
   root: THREE.Group;
   grid: OccupancyGrid;
+  /** Room footprints with their ceiling heights, for camera clearance. */
+  ceilings: CeilingRect[];
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   start: THREE.Vector3;
   /** One legal standing position per room, for spawning out of sight. */
@@ -830,9 +840,21 @@ export function compileFloor(
     startRoom.center[1],
   );
 
+  const ceilings: CeilingRect[] = plan.rooms.map((room) => {
+    const bounds = roomBounds(room);
+    return {
+      minX: bounds.x0,
+      maxX: bounds.x1,
+      minZ: bounds.z0,
+      maxZ: bounds.z1,
+      ceiling: room.ceiling,
+    };
+  });
+
   return {
     root,
     grid,
+    ceilings,
     bounds: { minX, maxX, minZ, maxZ },
     start,
     spawnPoints,
