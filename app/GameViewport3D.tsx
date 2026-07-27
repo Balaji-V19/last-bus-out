@@ -464,6 +464,8 @@ export const GameViewport3D = forwardRef<
     const cameraLookAhead = new THREE.Vector3();
     const desiredCamera = new THREE.Vector3();
     const cameraShakeOffset = new THREE.Vector3();
+    const beamToObject = new THREE.Vector3();
+    const beamForward = new THREE.Vector3();
     const lastPlayerPosition = playerRoot.position.clone();
     const livingEnemies: EnemyActor[] = [];
     let animationFrame = 0;
@@ -925,7 +927,7 @@ export const GameViewport3D = forwardRef<
     renderer.domElement.addEventListener("pointercancel", pointerUp);
     renderer.domElement.addEventListener("wheel", wheel, { passive: true });
 
-    const syncWorldState = (time: number) => {
+    const syncWorldState = (time: number, delta: number) => {
       const current = propsRef.current;
       if (hero) {
         setAnimatedEquipment(
@@ -966,18 +968,58 @@ export const GameViewport3D = forwardRef<
         );
         interaction.object.visible = visible;
         if (!visible) continue;
-        interaction.object.rotation.y = Math.sin(time * 0.5) * 0.08;
+
+        if (!interaction.object.userData.portable) continue;
+
+        // Portable pickups keep a token amount of motion (CLAUDE.md allows it
+        // for carryables only) but at an amplitude that reads as "handled
+        // recently", not as a collectible: a slow turn and a 12 mm rise.
+        const restHeight = Number(
+          interaction.object.userData.restHeight ?? 0,
+        );
         for (const child of interaction.object.children) {
-          if (child.userData.marker) {
-            child.rotation.z = time * 0.7;
-            child.scale.setScalar(1 + Math.sin(time * 2.4) * 0.08);
-          } else if (child.userData.staticInteraction) {
-            child.rotation.y = 0;
-          } else {
-            child.rotation.y = time * 0.65;
-            child.position.y = 0.72 + Math.sin(time * 2.2) * 0.08;
+          child.rotation.y = time * 0.16;
+          child.position.y = restHeight + Math.sin(time * 1.1) * 0.012;
+        }
+
+        // Torchlight is what finds objectives now. Raise the pickup's primed
+        // emissive when the beam is actually on it, so sweeping the corridor
+        // with the torch is the search mechanic.
+        let litFactor = 0;
+        if (current.inventory.torch) {
+          beamToObject
+            .copy(interaction.position)
+            .sub(playerRoot.position);
+          const range = beamToObject.length();
+          if (range < 26) {
+            beamToObject.divideScalar(Math.max(0.001, range));
+            beamForward
+              .set(-Math.sin(playerRoot.rotation.y), 0, -Math.cos(playerRoot.rotation.y))
+              .normalize();
+            const alignment = beamForward.dot(beamToObject);
+            // cos(22.5 deg) — matches the torch cone half-angle of PI/8.
+            if (alignment > 0.924) {
+              litFactor =
+                ((alignment - 0.924) / 0.076) * (1 - range / 26);
+            }
           }
         }
+        const targetEmissive = THREE.MathUtils.clamp(litFactor, 0, 1) * 0.42;
+        interaction.object.traverse((child) => {
+          if (!(child instanceof THREE.Mesh)) return;
+          const materials = Array.isArray(child.material)
+            ? child.material
+            : [child.material];
+          for (const material of materials) {
+            if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+            if (!material.userData.pickupGlow) continue;
+            material.emissiveIntensity = THREE.MathUtils.lerp(
+              material.emissiveIntensity,
+              targetEmissive,
+              1 - Math.exp(-delta * 7),
+            );
+          }
+        });
       }
 
       const spawnKey = `${current.chapter}:${current.step}`;
@@ -1119,7 +1161,7 @@ export const GameViewport3D = forwardRef<
       elapsedTime += delta;
       const time = elapsedTime;
       updateLocalLightBudget(delta);
-      syncWorldState(time);
+      syncWorldState(time, delta);
 
       if (current.mode === "playing") {
         if (keys.q) cameraYaw += delta * 1.4;

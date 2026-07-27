@@ -812,30 +812,58 @@ export function createEquipmentModel(kind: EquipmentKind, scale = 1) {
   return group;
 }
 
+// Height of the surface a portable pickup is resting on, in metres. Objectives
+// used to be lifted to a uniform 0.72 m and haloed with a spinning gold ring,
+// which read as an arcade collectible. They now sit at a believable height for
+// whatever they are lying on, and are found by torchlight instead.
+const PICKUP_SURFACE = {
+  floor: 0.04,
+  cot: 0.62,
+  desk: 0.76,
+  trolley: 0.92,
+} as const;
+
 function interactionObject(
   root: THREE.Group,
   id: string,
   label: string,
   position: [number, number, number],
   object: THREE.Group,
+  // Default is the floor: a dropped item in an evacuated hospital is grounded,
+  // and nothing is currently modelled underneath these positions to rest on.
+  // Stage 5 places them on real benches, cots and trolleys.
+  surface: keyof typeof PICKUP_SURFACE = "floor",
 ) {
   const holder = new THREE.Group();
   holder.position.set(...position);
   holder.userData.interactionId = id;
-  object.position.y = object.userData.staticInteraction ? 0 : 0.72;
-  holder.add(object);
 
-  const ringMaterial = new THREE.MeshStandardMaterial({
-    color: 0xd6a439,
-    emissive: 0xc47e14,
-    emissiveIntensity: 1.5,
-    roughness: 0.4,
-  });
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.68, 0.025, 8, 32), ringMaterial);
-  ring.rotation.x = Math.PI / 2;
-  ring.position.y = 0.07;
-  ring.userData.marker = true;
-  holder.add(ring);
+  const isStatic = Boolean(object.userData.staticInteraction);
+  const restHeight = isStatic ? 0 : PICKUP_SURFACE[surface];
+  object.position.y = restHeight;
+  holder.userData.restHeight = restHeight;
+  holder.userData.portable = !isStatic;
+
+  if (!isStatic) {
+    // Prime the pickup's own materials with a dim self-colour emissive so the
+    // viewport can raise it when the torch beam lands on the object. Hospital
+    // equipment carries retroreflective markings, so catching the light is the
+    // believable version of "this one matters" — and it makes the torch the
+    // finding mechanic rather than a screen-space marker.
+    object.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) {
+        if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+        if (material.emissiveIntensity > 0 && material.emissive.getHex() !== 0) continue;
+        material.emissive.copy(material.color);
+        material.emissiveIntensity = 0;
+        material.userData.pickupGlow = true;
+      }
+    });
+  }
+
+  holder.add(object);
   root.add(holder);
   return { id, label, position: holder.position.clone(), object: holder };
 }
