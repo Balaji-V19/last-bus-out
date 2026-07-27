@@ -101,6 +101,26 @@ button {
   animation: damage-impact 520ms ease-out forwards;
 }
 
+/* Wave telegraph. Amber rather than red so it does not read as damage taken,
+   and slow enough to feel like a building alarm rather than an impact. */
+.wave-alert {
+  z-index: 4;
+  background:
+    radial-gradient(circle at 50% 50%, transparent 46%, rgba(168, 108, 18, 0.42) 100%),
+    linear-gradient(0deg, rgba(150, 92, 12, 0.16), transparent 22% 78%, rgba(150, 92, 12, 0.16));
+  mix-blend-mode: screen;
+  animation: wave-alarm 1800ms ease-out forwards;
+}
+
+@keyframes wave-alarm {
+  0% { opacity: 0; }
+  12% { opacity: 0.9; }
+  30% { opacity: 0.25; }
+  48% { opacity: 0.85; }
+  66% { opacity: 0.2; }
+  100% { opacity: 0; }
+}
+
 .terror-pulse {
   z-index: 3;
   background:
@@ -217,6 +237,45 @@ button {
 .icon-button:hover {
   border-color: var(--signal);
   background: rgba(32, 35, 27, 0.9);
+}
+
+/* Minimap. Sits under the top-right controls, small enough to be glanced at
+   rather than read, and deliberately shows layout and the current objective
+   only — putting enemies on it would remove the reason to listen. */
+.minimap-frame {
+  position: absolute;
+  top: 78px;
+  right: max(24px, env(safe-area-inset-right));
+  z-index: 6;
+  width: 132px;
+  height: 132px;
+  padding: 5px;
+  border: 1px solid rgba(150, 176, 158, 0.28);
+  border-radius: 3px;
+  background: rgba(8, 12, 10, 0.62);
+  box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+  opacity: 0.82;
+}
+
+.minimap {
+  display: block;
+  width: 132px;
+  height: 132px;
+  image-rendering: pixelated;
+}
+
+@media (max-width: 720px) {
+  .minimap-frame {
+    top: 68px;
+    width: 92px;
+    height: 92px;
+  }
+
+  .minimap {
+    width: 92px;
+    height: 92px;
+  }
 }
 
 .status-stack {

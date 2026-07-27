@@ -186,6 +186,12 @@ export function LastBusOutGame() {
   const [combatScore, setCombatScore] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
   const [pov, setPov] = useState<PointOfView>("first");
+  const [waveAlert, setWaveAlert] = useState(0);
+  // Held in state rather than a ref so the viewport re-reads it once the canvas
+  // mounts; the viewport then draws to it directly, outside React.
+  const [minimapCanvas, setMinimapCanvas] = useState<HTMLCanvasElement | null>(
+    null,
+  );
   const [toast, setToast] = useState("");
   const [prompt, setPrompt] = useState<{ id: string; label: string } | null>(null);
   const [fuelProgress, setFuelProgress] = useState(0);
@@ -626,6 +632,14 @@ export function LastBusOutGame() {
     );
   }, [loadChapter, medicine, saveGame]);
 
+  // Something is coming. The banner is deliberately text-only and short-lived;
+  // the audio telegraph carries the direction, this only carries the fact.
+  const handleWaveWarning = useCallback((wave: number, _seconds: number) => {
+    void _seconds;
+    setWaveAlert((value) => value + 1);
+    showToast(wave > 0 ? `Containment failing · wave ${wave}` : "Movement ahead");
+  }, [showToast]);
+
   // Resuming has to re-acquire pointer lock, and pointer lock can only be
   // requested from a user gesture. Both the pause button and the Escape key
   // qualify; Chrome additionally throttles re-locking for about a second after
@@ -804,6 +818,7 @@ export function LastBusOutGame() {
             ammo={ammo}
             inventory={inventory}
             pov={pov}
+            minimapCanvas={minimapCanvas}
             resetToken={resetToken}
             onReady={() => setWorldReady(true)}
             onPovChange={setPov}
@@ -824,6 +839,7 @@ export function LastBusOutGame() {
             onEscapeProgress={handleEscapeProgress}
             onSurvivalProgress={handleSurvivalProgress}
             onFearChange={setDread}
+            onWaveWarning={handleWaveWarning}
             onSound={playSound}
           />
         </Suspense>
@@ -836,6 +852,7 @@ export function LastBusOutGame() {
         style={{ opacity: Math.max(0, (dread - 38) / 115) }}
       />
       {damagePulse > 0 && <div key={damagePulse} className="damage-flash" />}
+      {waveAlert > 0 && <div key={`wave-${waveAlert}`} className="wave-alert" />}
 
       {mode !== "menu" && mode !== "ending" && (
         <>
@@ -867,6 +884,10 @@ export function LastBusOutGame() {
                 Ⅱ
               </button>
             </div>
+          </div>
+
+          <div className="minimap-frame" aria-hidden="true">
+            <canvas ref={setMinimapCanvas} className="minimap" />
           </div>
 
           <div className="status-stack">

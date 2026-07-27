@@ -19,7 +19,14 @@ export type GameSoundEvent =
   | "heartbeat"
   | "horror-sting"
   | "metal-slam"
-  | "radio-static";
+  | "radio-static"
+  // Threat telegraphs. These exist so an attack is something the player can
+  // hear coming rather than a hit that simply lands.
+  | "zombie-lunge"
+  | "zombie-breath"
+  | "zombie-scream"
+  | "wave-warning"
+  | "wave-imminent";
 
 export type GameSoundOptions = {
   intensity?: number;
@@ -269,6 +276,12 @@ export class SurvivalAudio {
             ? 380
             : event === "radio-static"
               ? 950
+              : event === "zombie-breath"
+                ? 1300
+                : event === "zombie-scream"
+                  ? 2600
+                  : event === "zombie-lunge"
+                    ? 420
           : 25;
     if (now - (this.lastPlayed.get(event) ?? -Infinity) < minimumGap) return;
     this.lastPlayed.set(event, now);
@@ -350,6 +363,54 @@ export class SurvivalAudio {
       this.tone(92, 0.82, 0.065 * intensity, "sawtooth", pan, 31);
       this.tone(58, 0.9, 0.035 * intensity, "triangle", pan, 25, 0.04);
       this.noiseBurst(0.25, 0.07 * intensity, "lowpass", 360, pan, 0.58, 90);
+      return;
+    }
+
+    // Windup, played roughly a third of a second before the blow lands. Rising
+    // pitch so it reads as "something is about to happen" rather than as
+    // another growl in the mix.
+    if (event === "zombie-lunge") {
+      this.tone(96, 0.3, 0.075 * intensity, "sawtooth", pan, 188);
+      this.tone(143, 0.26, 0.042 * intensity, "square", pan, 260, 0.02);
+      this.noiseBurst(0.26, 0.062 * intensity, "bandpass", 520, pan, 0, 1450);
+      return;
+    }
+
+    // Wet, close-range breathing. Only ever triggered by proximity, so hearing
+    // it at all means something is near enough to matter.
+    if (event === "zombie-breath") {
+      this.noiseBurst(0.42, 0.05 * intensity, "bandpass", 620, pan, 0, 300);
+      this.noiseBurst(0.3, 0.032 * intensity, "bandpass", 240, pan, 0.4, 420);
+      this.tone(58, 0.34, 0.022 * intensity, "triangle", pan, 44, 0.05);
+      return;
+    }
+
+    // Runner acquiring the player. Deliberately the loudest thing in the game.
+    if (event === "zombie-scream") {
+      this.tone(320, 0.62, 0.085 * intensity, "sawtooth", pan, 128);
+      this.tone(196, 0.7, 0.062 * intensity, "square", pan, 92, 0.03);
+      this.tone(742, 0.4, 0.03 * intensity, "sawtooth", pan, 410, 0.015);
+      this.noiseBurst(0.55, 0.055 * intensity, "bandpass", 1350, pan, 0, 480);
+      return;
+    }
+
+    // Two-stage wave telegraph: a distant structural groan when the countdown
+    // opens, then a harder alarm doublet just before the doors give.
+    if (event === "wave-warning") {
+      this.tone(44, 1.5, 0.058 * intensity, "sine", pan, 33);
+      this.tone(67, 1.25, 0.03 * intensity, "triangle", pan, 51, 0.08);
+      this.noiseBurst(1.35, 0.03 * intensity, "lowpass", 210, pan, 0.05, 95);
+      this.noiseBurst(0.5, 0.022 * intensity, "bandpass", 1750, pan, 0.5, 900);
+      return;
+    }
+
+    if (event === "wave-imminent") {
+      for (let index = 0; index < 2; index += 1) {
+        const delay = index * 0.34;
+        this.tone(784, 0.2, 0.07 * intensity, "square", pan, undefined, delay);
+        this.tone(523, 0.24, 0.05 * intensity, "sawtooth", pan, undefined, delay + 0.02);
+      }
+      this.noiseBurst(0.32, 0.04 * intensity, "highpass", 2400, pan, 0.06);
       return;
     }
 

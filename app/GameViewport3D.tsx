@@ -43,6 +43,8 @@ type GameViewportProps = {
   ammo: number;
   inventory: Inventory;
   pov: PointOfView;
+  /** Canvas the minimap draws into. Drawn to directly, never through state. */
+  minimapCanvas: HTMLCanvasElement | null;
   resetToken: number;
   onReady: () => void;
   onPovChange: (pov: PointOfView) => void;
@@ -64,6 +66,8 @@ type GameViewportProps = {
     remaining: number,
   ) => void;
   onFearChange: (value: number) => void;
+  /** Fired when a wave or scripted encounter is coming, before anything spawns. */
+  onWaveWarning: (wave: number, seconds: number) => void;
   onSound: (event: GameSoundEvent, options?: GameSoundOptions) => void;
 };
 
@@ -111,6 +115,12 @@ type EnemyActor = {
   dying: boolean;
   /** Seconds spent unable to advance, used to break out of a wall wedge. */
   stuckClock: number;
+  /** Whether the windup cue has fired for the pending swing. */
+  telegraphed: boolean;
+  /** Countdown to the next proximity breath cue. */
+  breathClock: number;
+  /** Runners announce a charge once, not every frame they are close. */
+  screamed: boolean;
   root: THREE.Group;
   character: AnimatedCharacter | null;
   healthBar: HealthBar;
@@ -521,6 +531,135 @@ export const GameViewport3D = forwardRef<
     // growl on the same ear, and anything directly ahead or behind collapsed to
     // centre. Projecting onto the camera's right vector and normalising by
     // distance gives the sine of the bearing, which is what the ear expects.
+    // ---- minimap -----------------------------------------------------------
+    // The floor plan never changes while a chapter is loaded, so it is rendered
+    // once into an offscreen canvas and blitted each update; only the player
+    // marker and objective pips are redrawn. Drawing goes straight to the DOM
+    // canvas, never through React state.
+    const MINIMAP_SIZE = 132;
+    const minimapWorld = { minX: 0, minZ: 0, scale: 1 };
+    let minimapBase: HTMLCanvasElement | null = null;
+    let minimapClock = 0;
+
+    const buildMinimapBase = () => {
+      const span = Math.max(
+        world.bounds.maxX - world.bounds.minX,
+        world.bounds.maxZ - world.bounds.minZ,
+      );
+      if (span <= 0) return;
+      const scale = (MINIMAP_SIZE - 8) / span;
+      minimapWorld.minX = world.bounds.minX;
+      minimapWorld.minZ = world.bounds.minZ;
+      minimapWorld.scale = scale;
+
+      const base = document.createElement("canvas");
+      base.width = MINIMAP_SIZE;
+      base.height = MINIMAP_SIZE;
+      const context = base.getContext("2d");
+      if (!context) return;
+      context.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+
+      const toMap = (x: number, z: number): [number, number] => [
+        4 + (x - minimapWorld.minX) * scale,
+        4 + (z - minimapWorld.minZ) * scale,
+      ];
+
+      if (world.grid) {
+        // Room-graph floor: paint walkable cells, which gives an accurate plan
+        // including doorways and dead ends.
+        const grid = world.grid;
+        const cellSize = Math.max(1, Math.ceil(grid.cell * scale));
+        context.fillStyle = "rgba(150, 176, 158, 0.34)";
+        for (let row = 0; row < grid.height; row += 1) {
+          for (let column = 0; column < grid.width; column += 1) {
+            if ((grid.data[row * grid.width + column] & 1) === 0) continue;
+            const [mapX, mapY] = toMap(
+              grid.originX + column * grid.cell,
+              grid.originZ + row * grid.cell,
+            );
+            context.fillRect(mapX, mapY, cellSize, cellSize);
+          }
+        }
+      } else {
+        // Legacy corridor floor: the walkable area is the bounds rectangle with
+        // the collision circles punched out.
+        const [x0, y0] = toMap(world.bounds.minX, world.bounds.minZ);
+        const [x1, y1] = toMap(world.bounds.maxX, world.bounds.maxZ);
+        context.fillStyle = "rgba(150, 176, 158, 0.34)";
+        context.fillRect(x0, y0, x1 - x0, y1 - y0);
+        context.fillStyle = "rgba(10, 16, 14, 0.72)";
+        for (const collision of world.collisions) {
+          const [cx, cy] = toMap(collision.x, collision.z);
+          context.beginPath();
+          context.arc(cx, cy, Math.max(1, collision.radius * scale), 0, Math.PI * 2);
+          context.fill();
+        }
+      }
+      minimapBase = base;
+    };
+
+    const drawMinimap = () => {
+      const canvas = propsRef.current.minimapCanvas;
+      if (!canvas || !minimapBase) return;
+      if (canvas.width !== MINIMAP_SIZE) canvas.width = MINIMAP_SIZE;
+      if (canvas.height !== MINIMAP_SIZE) canvas.height = MINIMAP_SIZE;
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      const { scale } = minimapWorld;
+      const toMap = (x: number, z: number): [number, number] => [
+        4 + (x - minimapWorld.minX) * scale,
+        4 + (z - minimapWorld.minZ) * scale,
+      ];
+
+      context.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+      context.drawImage(minimapBase, 0, 0);
+
+      // Objective pips: only ones currently available, so the map answers
+      // "where now" rather than listing everything on the floor.
+      const current = propsRef.current;
+      for (const interaction of world.interactions) {
+        if (
+          !isInteractionAvailable(
+            current.chapter,
+            current.step,
+            interaction.id,
+            current.inventory,
+          )
+        ) {
+          continue;
+        }
+        const [px, py] = toMap(interaction.position.x, interaction.position.z);
+        context.fillStyle = "rgba(226, 178, 74, 0.95)";
+        context.beginPath();
+        context.arc(px, py, 3.1, 0, Math.PI * 2);
+        context.fill();
+        context.strokeStyle = "rgba(20, 14, 4, 0.85)";
+        context.lineWidth = 1;
+        context.stroke();
+      }
+
+      // Player: a facing wedge, so the map is readable without a compass.
+      const [mx, my] = toMap(playerRoot.position.x, playerRoot.position.z);
+      const heading = playerRoot.rotation.y;
+      context.fillStyle = "rgba(214, 232, 214, 0.95)";
+      context.beginPath();
+      for (const [length, spread] of [
+        [6.4, 0],
+        [4.2, 2.5],
+        [4.2, -2.5],
+      ] as const) {
+        const angle = heading + Math.PI + spread;
+        const pointX = mx + Math.sin(angle) * -length;
+        const pointY = my + Math.cos(angle) * -length;
+        if (spread === 0) context.moveTo(pointX, pointY);
+        else context.lineTo(pointX, pointY);
+      }
+      context.closePath();
+      context.fill();
+    };
+
+    buildMinimapBase();
+
     const panScratch = new THREE.Vector3();
     const panFor = (position: THREE.Vector3, limit = 0.92) => {
       panScratch.copy(position).sub(playerRoot.position);
@@ -552,6 +691,8 @@ export const GameViewport3D = forwardRef<
     let escapeDirectorClock = 7;
     let statsClock = 0;
     let progressReportClock = 0;
+    let pendingEncounter: (() => void) | null = null;
+    let pendingEncounterClock = 0;
     let nextEnemyId = 1;
     let elapsedTime = 0;
     let fear = 8;
@@ -695,6 +836,9 @@ export const GameViewport3D = forwardRef<
         deathTimer: 0,
         dying: false,
         stuckClock: 0,
+        telegraphed: false,
+        breathClock: 0.8 + Math.random() * 2.2,
+        screamed: false,
         root,
         character: null,
         healthBar,
@@ -1168,50 +1312,73 @@ export const GameViewport3D = forwardRef<
       if (spawnKey === encounterKey) return;
       encounterKey = spawnKey;
       encounterWasActive = false;
+
+      // Scripted encounters no longer materialise the instant a step flips.
+      // The spawn is deferred behind a warning cue so the player hears
+      // something coming and has a beat to reposition, which is the whole
+      // difference between a scare and an ambush that just happens.
+      const arm = (spawn: () => void, warning = 1.9) => {
+        pendingEncounter = () => {
+          spawn();
+          encounterWasActive = true;
+        };
+        pendingEncounterClock = warning;
+        current.onSound("wave-warning", { intensity: 0.85 });
+        current.onWaveWarning(0, warning);
+      };
+
       if (current.chapter === "hospital" && current.step === 3) {
         // Room-relative now that Ground Emergency is a room graph rather than a
         // corridor: the old absolute coordinates sat outside the new footprint.
-        spawnEnemyInRoom("walker", "triage", -2.6, -3.4);
-        spawnEnemyInRoom("runner", "bayB", 1.8, -1.2);
-        spawnEnemyInRoom("walker", "nurse", 1.4, -1.8);
-        encounterWasActive = true;
+        arm(() => {
+          spawnEnemyInRoom("walker", "triage", -2.6, -3.4);
+          spawnEnemyInRoom("runner", "bayB", 1.8, -1.2);
+          spawnEnemyInRoom("walker", "nurse", 1.4, -1.8);
+        });
       } else if (current.chapter === "hospital" && current.step === 5) {
-        spawnEnemyInRoom("walker", "southHall", -3.2, 1.4);
-        spawnEnemyInRoom("runner", "radiology", 2.6, -1.6);
-        spawnEnemyInRoom("walker", "subWait", 2.2, 2.4);
-        spawnEnemyInRoom("heavy", "stairwell", 0, 2.6);
-        encounterWasActive = true;
+        arm(() => {
+          spawnEnemyInRoom("walker", "southHall", -3.2, 1.4);
+          spawnEnemyInRoom("runner", "radiology", 2.6, -1.6);
+          spawnEnemyInRoom("walker", "subWait", 2.2, 2.4);
+          spawnEnemyInRoom("heavy", "stairwell", 0, 2.6);
+        });
       } else if (current.chapter === "street" && current.step === 1) {
-        spawnEnemy("walker", -2.7, -55);
-        spawnEnemy("runner", 4.7, -63);
-        spawnEnemy("walker", 1.6, -78);
-        encounterWasActive = true;
+        arm(() => {
+          spawnEnemy("walker", -2.7, -55);
+          spawnEnemy("runner", 4.7, -63);
+          spawnEnemy("walker", 1.6, -78);
+        });
       } else if (current.chapter === "station" && current.step === 3) {
-        spawnEnemy("walker", -5.8, -48);
-        spawnEnemy("runner", 5.9, -57);
-        spawnEnemy("walker", 4, -71);
-        encounterWasActive = true;
-        stationWaveClock = 0;
+        arm(() => {
+          spawnEnemy("walker", -5.8, -48);
+          spawnEnemy("runner", 5.9, -57);
+          spawnEnemy("walker", 4, -71);
+          stationWaveClock = 0;
+        });
       } else if (current.chapter === "checkpoint" && current.step === 2) {
-        spawnEnemy("walker", -4.8, -51);
-        spawnEnemy("runner", 5.4, -57);
-        spawnEnemy("heavy", 0.8, -76);
-        encounterWasActive = true;
-        horrorPulse = 4.8;
-        current.onSound("horror-sting", { intensity: 1.1 });
+        arm(() => {
+          spawnEnemy("walker", -4.8, -51);
+          spawnEnemy("runner", 5.4, -57);
+          spawnEnemy("heavy", 0.8, -76);
+          horrorPulse = 4.8;
+          current.onSound("horror-sting", { intensity: 1.1 });
+        }, 2.3);
       } else if (current.chapter === "depot" && current.step === 3) {
-        spawnEnemy("walker", -5.8, -45);
-        spawnEnemy("runner", 5.9, -57);
-        spawnEnemy("walker", -3.5, -72);
-        spawnEnemy("heavy", 4.8, -82);
-        encounterWasActive = true;
-        horrorPulse = 5.5;
-        current.onSound("metal-slam", { intensity: 1.15 });
+        arm(() => {
+          spawnEnemy("walker", -5.8, -45);
+          spawnEnemy("runner", 5.9, -57);
+          spawnEnemy("walker", -3.5, -72);
+          spawnEnemy("heavy", 4.8, -82);
+          horrorPulse = 5.5;
+          current.onSound("metal-slam", { intensity: 1.15 });
+        }, 2.3);
       } else if (current.chapter === "escape") {
-        spawnEnemy("walker", -2.8, -31);
-        spawnEnemy("runner", 4.2, -68);
-        spawnEnemy("heavy", -3.6, -94);
-        escapeDirectorClock = 8;
+        arm(() => {
+          spawnEnemy("walker", -2.8, -31);
+          spawnEnemy("runner", 4.2, -68);
+          spawnEnemy("heavy", -3.6, -94);
+          escapeDirectorClock = 8;
+        });
       }
     };
 
@@ -1618,6 +1785,53 @@ export const GameViewport3D = forwardRef<
           }
 
           enemy.attackClock -= delta;
+
+          // Attack telegraph. The blow itself is still resolved on the clock,
+          // but a lunge cue fires while the enemy is closing and its cooldown
+          // is nearly up, so a hit is something you can hear arriving instead
+          // of damage that simply appears.
+          if (
+            !enemy.telegraphed &&
+            distance < 2.5 &&
+            enemy.attackClock <= 0.34 &&
+            !enemy.dying
+          ) {
+            enemy.telegraphed = true;
+            current.onSound("zombie-lunge", {
+              intensity: THREE.MathUtils.clamp(1.2 - distance / 3.4, 0.45, 1.15),
+              pan: panFor(enemy.root.position, 0.9),
+            });
+          }
+
+          // Close-range breathing, staggered per actor so several enemies do
+          // not inhale in unison.
+          if (distance < 6.5 && !enemy.dying) {
+            enemy.breathClock -= delta;
+            if (enemy.breathClock <= 0) {
+              enemy.breathClock = 1.9 + Math.random() * 2.4;
+              current.onSound("zombie-breath", {
+                intensity: THREE.MathUtils.clamp(1.1 - distance / 8, 0.22, 0.85),
+                pan: panFor(enemy.root.position, 0.85),
+              });
+            }
+          }
+
+          // A runner committing to a charge announces itself once per chase.
+          if (
+            enemy.style === "runner" &&
+            !enemy.screamed &&
+            canChase &&
+            distance < 18 &&
+            !enemy.dying
+          ) {
+            enemy.screamed = true;
+            current.onSound("zombie-scream", {
+              intensity: THREE.MathUtils.clamp(1.25 - distance / 26, 0.5, 1.2),
+              pan: panFor(enemy.root.position, 0.92),
+            });
+            horrorPulse = Math.max(horrorPulse, 2.4);
+          }
+
           if (distance < 1.45 && enemy.attackClock <= 0) {
             enemy.attackClock =
               enemy.character?.style === "runner"
@@ -1625,6 +1839,8 @@ export const GameViewport3D = forwardRef<
                 : enemy.character?.style === "heavy"
                   ? 1.48
                   : 1.18;
+            // Re-arm the telegraph for the next swing.
+            enemy.telegraphed = false;
             enemy.attackAnimation = 0.74;
             heroHitTimer = 0.36;
             cameraShake = enemy.character?.style === "heavy" ? 0.58 : 0.34;
@@ -2036,6 +2252,23 @@ export const GameViewport3D = forwardRef<
           current.onEncounterCleared();
         }
 
+        // Release a warned encounter once its telegraph has played out.
+        if (pendingEncounter) {
+          pendingEncounterClock -= delta;
+          if (pendingEncounterClock <= 0) {
+            const release = pendingEncounter;
+            pendingEncounter = null;
+            release();
+          }
+        }
+
+        // 10 Hz is plenty for a 132 px map and keeps it off the render budget.
+        minimapClock += delta;
+        if (minimapClock >= 0.1) {
+          minimapClock = 0;
+          drawMinimap();
+        }
+
         progressReportClock += delta;
         const reportProgress = progressReportClock >= 0.12;
         if (reportProgress) progressReportClock = 0;
@@ -2044,7 +2277,24 @@ export const GameViewport3D = forwardRef<
           survivalTime += delta;
           survivalReportClock += delta;
           if (livingEnemies.length === 0) {
+            const previousClock = survivalWaveClock;
             survivalWaveClock -= delta;
+            // Two-stage telegraph across the lull between waves: a distant
+            // structural groan as the countdown opens, then an alarm doublet
+            // with about a second left. The player gets time to reposition and
+            // to hear which way the pressure is coming from.
+            if (previousClock > 3.2 && survivalWaveClock <= 3.2) {
+              current.onSound("wave-warning", {
+                intensity: Math.min(1.2, 0.7 + survivalWave * 0.03),
+              });
+              current.onWaveWarning(survivalWave + 1, 3.2);
+            }
+            if (previousClock > 1.05 && survivalWaveClock <= 1.05) {
+              current.onSound("wave-imminent", {
+                intensity: Math.min(1.2, 0.8 + survivalWave * 0.03),
+              });
+              horrorPulse = Math.max(horrorPulse, 2.2);
+            }
             if (survivalWaveClock <= 0) {
               survivalWave += 1;
               survivalWaveClock = 3.6;
