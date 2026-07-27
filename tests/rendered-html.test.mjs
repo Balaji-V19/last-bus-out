@@ -28,9 +28,9 @@ test("server-renders the lightweight Last Bus Out launch menu", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Last Bus Out: Road to Haven<\/title>/i);
+  assert.match(html, /<title>Last Bus Out: St. Orison<\/title>/i);
   assert.match(html, /three-dimensional survival game/i);
-  assert.match(html, /Begin the escape/);
+  assert.match(html, /Enter St. Orison/);
   assert.match(html, /WASD/);
   assert.match(html, /menu-screen/);
   assert.doesNotMatch(html, /game-viewport-3d/);

@@ -1671,6 +1671,49 @@ function assetRig(model: THREE.Object3D): CharacterRig {
   };
 }
 
+function addAssetMutationGrowths(
+  model: THREE.Group,
+  style: "runner" | "heavy",
+) {
+  const group = new THREE.Group();
+  group.name = style === "heavy" ? "MutationGrowths_Heavy" : "MutationGrowths_Runner";
+  const tissue = new THREE.MeshStandardMaterial({
+    color: style === "heavy" ? 0x4c342d : 0x4a2826,
+    roughness: 0.88,
+    metalness: 0,
+    emissive: style === "heavy" ? 0x210904 : 0x150302,
+    emissiveIntensity: 0.18,
+  });
+  tissue.name = "OriginalMutationTissue";
+  const nodes =
+    style === "heavy"
+      ? [
+          [-0.33, 1.46, 0.04, 0.17, 1.12, 0.82],
+          [-0.25, 1.28, -0.11, 0.13, 0.85, 1.06],
+          [0.31, 1.18, 0.03, 0.12, 1.18, 0.78],
+          [0.18, 0.95, -0.13, 0.09, 0.82, 1.2],
+          [-0.13, 1.62, 0.08, 0.095, 0.9, 0.76],
+        ]
+      : [
+          [0.28, 1.42, 0.02, 0.105, 1.08, 0.72],
+          [0.23, 1.24, -0.1, 0.075, 0.78, 1.16],
+          [-0.2, 1.05, 0.07, 0.065, 1.15, 0.82],
+        ];
+  for (let index = 0; index < nodes.length; index += 1) {
+    const [x, y, z, radius, scaleY, scaleZ] = nodes[index];
+    const geometry = new THREE.IcosahedronGeometry(radius, 1);
+    const growth = new THREE.Mesh(geometry, tissue);
+    growth.name = `MutationNodule_${index + 1}`;
+    growth.position.set(x, y, z);
+    growth.scale.set(1 + index * 0.035, scaleY, scaleZ);
+    growth.rotation.set(index * 0.41, index * 0.73, index * 0.29);
+    growth.castShadow = true;
+    growth.userData.ownedGeometry = true;
+    group.add(growth);
+  }
+  model.add(group);
+}
+
 async function createLicensedCharacter(
   style: AnimatedStyle,
 ): Promise<AnimatedCharacter> {
@@ -1730,6 +1773,20 @@ async function createLicensedCharacter(
     const clonedMaterials = sourceMaterials.map((sourceMaterial) => {
       const material = sourceMaterial.clone();
       if (material instanceof THREE.MeshStandardMaterial) {
+        const materialName = material.name.toLowerCase();
+        if (style === "heavy") {
+          material.color.lerp(new THREE.Color(0x4a5745), 0.24);
+          material.roughness = Math.max(material.roughness, 0.88);
+        } else if (style === "runner") {
+          material.color.lerp(new THREE.Color(0x66544f), 0.16);
+        }
+        if (
+          (style === "runner" || style === "heavy") &&
+          materialName.includes("eye")
+        ) {
+          material.emissive.setHex(style === "heavy" ? 0x8f190d : 0x642016);
+          material.emissiveIntensity = style === "heavy" ? 1.15 : 0.72;
+        }
         material.userData.baseEmissive = material.emissive.getHex();
         material.userData.baseEmissiveIntensity = material.emissiveIntensity;
         if (!material.name.toLowerCase().includes("eye")) {
@@ -1745,6 +1802,9 @@ async function createLicensedCharacter(
 
   const rig = assetRig(assetScene);
   const weaponNodes: THREE.Object3D[] = [];
+  if (style === "runner" || style === "heavy") {
+    addAssetMutationGrowths(assetScene, style);
+  }
   if (style === "hero" || style === "maya") {
     const equipmentMaterials = createMaterials(style);
     const axe = createAxe(equipmentMaterials);
@@ -2375,7 +2435,9 @@ export function disposeAnimatedCharacter(character: AnimatedCharacter) {
   const materials = new Set<THREE.Material>();
   character.model.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
-    if (!character.sharedGeometry) geometries.add(object.geometry);
+    if (!character.sharedGeometry || object.userData.ownedGeometry) {
+      geometries.add(object.geometry);
+    }
     const objectMaterials = Array.isArray(object.material)
       ? object.material
       : [object.material];

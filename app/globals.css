@@ -223,7 +223,7 @@ button {
   position: absolute;
   left: max(24px, env(safe-area-inset-left));
   bottom: max(28px, env(safe-area-inset-bottom));
-  width: min(270px, 40vw);
+  width: min(300px, 42vw);
   pointer-events: none;
 }
 
@@ -257,6 +257,15 @@ button {
 
 .bar-fill.stamina {
   background: #d4c58f;
+}
+
+.bar-fill.infection {
+  background: linear-gradient(90deg, #70845b, #b7a336 58%, #bd3125);
+  box-shadow: 0 0 11px rgba(160, 190, 80, 0.34);
+}
+
+.infection-row {
+  color: #d8dfad;
 }
 
 .bar-fill.dread {
@@ -356,6 +365,10 @@ button {
 .item-radio { background-position: 50% 0; }
 .item-torch { background-position: 100% 0; }
 .item-medkit { background-position: 0 100%; }
+.item-antiviral {
+  background-position: 0 100%;
+  filter: hue-rotate(72deg) saturate(1.25) drop-shadow(0 3px 3px rgba(0, 0, 0, 0.58));
+}
 .item-pistol { background-position: 50% 100%; }
 .item-fuel { background-position: 100% 100%; }
 
@@ -367,6 +380,21 @@ button {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.antiviral-slot {
+  border-color: rgba(155, 190, 95, 0.52);
+}
+
+.rescue-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  margin-top: 8px;
+  color: rgba(220, 224, 207, 0.68);
+  font: 8px/1.4 monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .prompt {
@@ -575,19 +603,17 @@ button {
 .ending-screen::after {
   content: "";
   position: absolute;
-  right: 7vw;
-  bottom: -8vh;
-  width: min(32vw, 420px);
-  height: 78vh;
+  right: 0;
+  bottom: 0;
+  width: min(54vw, 820px);
+  height: 100%;
   background:
-    radial-gradient(circle at 50% 10%, #171b18 0 6%, transparent 6.5%),
-    linear-gradient(90deg, transparent 33%, #111512 34% 66%, transparent 67%) 50% 15% / 100% 30% no-repeat,
-    linear-gradient(75deg, transparent 39%, #111512 40% 48%, transparent 49%) 13% 45% / 50% 45% no-repeat,
-    linear-gradient(-75deg, transparent 39%, #111512 40% 48%, transparent 49%) 87% 45% / 50% 45% no-repeat,
-    linear-gradient(80deg, transparent 43%, #111512 44% 54%, transparent 55%) 25% 100% / 50% 60% no-repeat,
-    linear-gradient(-80deg, transparent 43%, #111512 44% 54%, transparent 55%) 75% 100% / 50% 60% no-repeat;
-  filter: drop-shadow(0 0 70px rgba(196, 73, 42, 0.25));
-  opacity: 0.95;
+    radial-gradient(ellipse at 72% 31%, rgba(191, 52, 31, 0.28), transparent 5%),
+    radial-gradient(ellipse at 72% 31%, rgba(139, 36, 24, 0.2), transparent 22%),
+    linear-gradient(164deg, transparent 0 38%, rgba(25, 37, 33, 0.62) 38.5% 39%, transparent 39.5%),
+    linear-gradient(196deg, transparent 0 38%, rgba(25, 37, 33, 0.62) 38.5% 39%, transparent 39.5%),
+    linear-gradient(90deg, transparent, rgba(9, 14, 12, 0.5));
+  opacity: 0.8;
   pointer-events: none;
 }
 
@@ -742,7 +768,7 @@ button {
 
 .run-stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 1px;
   margin: 26px 0;
   background: rgba(255, 255, 255, 0.15);
@@ -958,7 +984,7 @@ button {
   }
 
   .run-stats {
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
   }
 
   .run-stats div {

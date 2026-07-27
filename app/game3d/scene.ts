@@ -1361,7 +1361,7 @@ function interactionObject(
   const holder = new THREE.Group();
   holder.position.set(...position);
   holder.userData.interactionId = id;
-  object.position.y = 0.72;
+  object.position.y = object.userData.staticInteraction ? 0 : 0.72;
   holder.add(object);
 
   const ringMaterial = new THREE.MeshStandardMaterial({
@@ -1430,7 +1430,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     ["SURGERY", -55, "rgba(76,45,42,.96)"],
     ["EMERGENCY", -76, "rgba(95,34,29,.96)"],
     ["ISOLATION", -96, "rgba(80,33,30,.96)"],
-    ["AMBULANCE", -112, "rgba(34,70,55,.96)"],
+    ["STAIRWELL A", -112, "rgba(34,70,55,.96)"],
   ] as const) {
     const sign = textPanel(label, "#e8eee5", color);
     sign.position.set(0, 3.82, z);
@@ -1664,7 +1664,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     debris.castShadow = false;
   }
 
-  const exitSign = textPanel("AMBULANCE EXIT", "#d9eadb", "rgba(28,74,54,.96)");
+  const exitSign = textPanel("STAIRWELL A · FLOOR 2", "#d9eadb", "rgba(28,74,54,.96)");
   exitSign.position.set(0, 4.12, -118.5);
   exitSign.scale.set(1.15, 1.15, 1);
   root.add(exitSign);
@@ -1712,8 +1712,8 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     interactionObject(root, "torch", "Take torch", [1.4, 0, -10], createEquipmentModel("torch", 1)),
     interactionObject(root, "radio", "Check emergency radio", [-4.6, 0, -26], createEquipmentModel("radio", 1)),
     interactionObject(root, "axe", "Take fire axe", [4.7, 0, -45], createEquipmentModel("axe", 1)),
-    interactionObject(root, "breaker", "Reset ambulance-door breaker", [6.6, 0, -92], breaker),
-    interactionObject(root, "exit", "Open ambulance entrance", [0, 0, -115], new THREE.Group()),
+    interactionObject(root, "breaker", "Reset stairwell power", [6.6, 0, -92], breaker),
+    interactionObject(root, "exit", "Enter Stairwell A", [0, 0, -115], new THREE.Group()),
   );
 
   return {
@@ -2639,22 +2639,456 @@ function buildSurvival(materials: MaterialSet): BuiltWorld {
   };
 }
 
+function hospitalElevatorBank(
+  materials: MaterialSet,
+  label: string,
+  powered = false,
+) {
+  const group = new THREE.Group();
+  group.userData.staticInteraction = true;
+  roundedBox(
+    group,
+    [5.2, 4.2, 0.34],
+    [0, 2.05, 0],
+    materials.concreteDark,
+    0.08,
+  );
+  for (const side of [-1, 1]) {
+    roundedBox(
+      group,
+      [2.34, 3.7, 0.18],
+      [side * 1.24, 1.85, 0.2],
+      materials.paintedMetal,
+      0.06,
+    );
+    box(
+      group,
+      [0.06, 3.58, 0.05],
+      [side * 1.24, 1.85, 0.31],
+      materials.metal,
+    );
+  }
+  const display = textPanel(
+    label,
+    powered ? "#c9f5ce" : "#f1c7b9",
+    powered ? "rgba(27,72,47,.96)" : "rgba(83,29,25,.96)",
+  );
+  display.position.set(0, 4.32, 0.26);
+  display.scale.set(0.72, 0.72, 0.72);
+  group.add(display);
+  const callLight = new THREE.MeshStandardMaterial({
+    color: powered ? 0x7acb75 : 0xb53225,
+    emissive: powered ? 0x2a8b45 : 0x761109,
+    emissiveIntensity: powered ? 2.1 : 1.35,
+    roughness: 0.46,
+  });
+  roundedBox(group, [0.22, 0.34, 0.08], [3, 1.42, 0.27], callLight, 0.03);
+  return group;
+}
+
+function hospitalFoodCache(materials: MaterialSet) {
+  const group = new THREE.Group();
+  group.userData.staticInteraction = true;
+  const cardboard = new THREE.MeshStandardMaterial({
+    color: 0x7d6240,
+    roughness: 0.98,
+  });
+  for (const [x, y, z, scale] of [
+    [-0.42, 0.28, 0.08, 0.86],
+    [0.36, 0.24, -0.12, 0.72],
+    [0.02, 0.68, 0.04, 0.62],
+  ] as const) {
+    roundedBox(
+      group,
+      [0.92 * scale, 0.58 * scale, 0.72 * scale],
+      [x, y, z],
+      cardboard,
+      0.06,
+    );
+    box(
+      group,
+      [0.12 * scale, 0.59 * scale, 0.73 * scale],
+      [x, y, z],
+      materials.yellow,
+    );
+  }
+  for (const x of [-0.52, -0.18, 0.2, 0.56]) {
+    cylinder(
+      group,
+      [0.1, 0.1],
+      0.32,
+      [x, 0.98 + Math.abs(x) * 0.08, 0.06],
+      materials.paintedMetal,
+      [0, 0, 0],
+      16,
+    );
+  }
+  return group;
+}
+
+function hospitalPowerConsole(materials: MaterialSet) {
+  const group = new THREE.Group();
+  group.userData.staticInteraction = true;
+  roundedBox(
+    group,
+    [1.5, 1.72, 0.52],
+    [0, 0.82, 0],
+    materials.paintedMetal,
+    0.08,
+  );
+  roundedBox(group, [1.08, 0.48, 0.05], [0, 1.15, 0.3], materials.glass, 0.04);
+  for (const [x, color] of [
+    [-0.38, materials.red],
+    [-0.12, materials.yellow],
+    [0.14, materials.darkGreen],
+    [0.4, materials.white],
+  ] as const) {
+    cylinder(
+      group,
+      [0.055, 0.055],
+      0.08,
+      [x, 0.66, 0.31],
+      color,
+      [Math.PI / 2, 0, 0],
+      12,
+    );
+  }
+  box(group, [0.18, 0.54, 0.16], [0.34, 0.24, 0.34], materials.rust, [0, 0, -0.28]);
+  return group;
+}
+
+function hospitalWardBoard(materials: MaterialSet) {
+  const group = new THREE.Group();
+  group.userData.staticInteraction = true;
+  roundedBox(
+    group,
+    [1.8, 1.22, 0.12],
+    [0, 1.22, 0],
+    materials.paintedMetal,
+    0.08,
+  );
+  roundedBox(group, [1.58, 0.98, 0.04], [0, 1.22, -0.08], materials.white, 0.04);
+  const heading = textPanel(
+    "WEST WARD · OCCUPANCY",
+    "#e9eee8",
+    "rgba(37,65,56,.98)",
+  );
+  heading.position.set(0, 1.49, -0.12);
+  heading.scale.set(0.36, 0.28, 0.36);
+  group.add(heading);
+  for (const [y, color, width] of [
+    [1.3, materials.red, 0.96],
+    [1.12, materials.yellow, 1.2],
+    [0.94, materials.darkGreen, 0.72],
+  ] as const) {
+    roundedBox(group, [width, 0.06, 0.025], [-0.12, y, -0.115], color, 0.015);
+  }
+  box(group, [0.1, 2.1, 0.1], [-0.74, 0.1, 0.02], materials.metal);
+  box(group, [0.1, 2.1, 0.1], [0.74, 0.1, 0.02], materials.metal);
+  return group;
+}
+
+function hospitalSurvivorCot(materials: MaterialSet, family = false) {
+  const group = new THREE.Group();
+  group.userData.staticInteraction = true;
+  const cot = hospitalBed(materials, 0, 0, 0);
+  cot.scale.setScalar(0.78);
+  cot.position.set(0, 0, 0);
+  group.add(cot);
+  const blanket = new THREE.MeshStandardMaterial({
+    color: family ? 0x6e805f : 0x657b83,
+    roughness: 1,
+  });
+  roundedBox(group, [1.18, 0.2, 0.66], [0, 0.92, 0.04], blanket, 0.08);
+  roundedBox(
+    group,
+    [0.34, 0.22, 0.46],
+    [0, 1.05, -0.56],
+    materials.fabric,
+    0.12,
+  );
+  if (family) {
+    roundedBox(group, [0.52, 0.18, 0.38], [0.62, 0.84, 0.12], blanket, 0.1);
+  }
+  return group;
+}
+
+function mutationSpecimenPod(materials: MaterialSet, x: number, z: number) {
+  const group = new THREE.Group();
+  group.position.set(x, 0, z);
+  cylinder(group, [0.78, 0.9], 0.3, [0, 0.15, 0], materials.metal, [0, 0, 0], 20);
+  const fluid = new THREE.MeshPhysicalMaterial({
+    color: 0x486c55,
+    emissive: 0x142a1b,
+    emissiveIntensity: 0.6,
+    roughness: 0.18,
+    transparent: true,
+    opacity: 0.52,
+    transmission: 0.2,
+  });
+  cylinder(group, [0.68, 0.68], 2.65, [0, 1.62, 0], fluid, [0, 0, 0], 24);
+  cylinder(group, [0.84, 0.76], 0.34, [0, 3.05, 0], materials.metal, [0, 0, 0], 20);
+  const growth = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.5, 2),
+    new THREE.MeshStandardMaterial({
+      color: 0x364b35,
+      emissive: 0x172919,
+      emissiveIntensity: 0.72,
+      roughness: 0.9,
+    }),
+  );
+  growth.position.set(0.04, 1.56, 0);
+  growth.scale.set(0.76, 1.58, 0.68);
+  group.add(growth);
+  const alarm = new THREE.PointLight(0xa92d22, 1.4, 7, 2);
+  alarm.position.set(0, 3.36, 0);
+  alarm.userData.baseIntensity = 1.4;
+  alarm.userData.flicker = true;
+  group.add(alarm);
+  return group;
+}
+
+function buildHospitalWing(
+  materials: MaterialSet,
+  chapter: Exclude<GameChapter, "hospital">,
+): BuiltWorld {
+  const root = new THREE.Group();
+  const collisions: CollisionCircle[] = [];
+  const interactions: InteractionPoint[] = [];
+  baseScene(root, "hospital");
+
+  const floorConfig: Record<
+    Exclude<GameChapter, "hospital">,
+    { sign: string; subSign: string; accent: string; light: number }
+  > = {
+    street: {
+      sign: "FLOOR 2 · PATIENT WARD",
+      subSign: "WEST WARD / SURVIVOR SEARCH",
+      accent: "rgba(42,76,70,.97)",
+      light: 1.85,
+    },
+    station: {
+      sign: "BASEMENT B1 · SERVICES",
+      subSign: "COLD STORAGE / EMERGENCY POWER",
+      accent: "rgba(70,58,38,.97)",
+      light: 1.35,
+    },
+    checkpoint: {
+      sign: "FLOOR 3 · ISOLATION",
+      subSign: "PEDIATRICS / NEGATIVE PRESSURE",
+      accent: "rgba(74,38,40,.97)",
+      light: 1.12,
+    },
+    depot: {
+      sign: "FLOOR 4 · RESEARCH",
+      subSign: "PHARMACY / PATHOLOGY LAB",
+      accent: "rgba(44,55,67,.97)",
+      light: 0.92,
+    },
+    escape: {
+      sign: "GROUND FLOOR · SAFE WING",
+      subSign: "SHELTER 04 / MANUAL LOCK",
+      accent: "rgba(35,72,52,.97)",
+      light: 1.48,
+    },
+    survival: {
+      sign: "QUARANTINE ANNEX",
+      subSign: "CONTAINMENT FAILURE",
+      accent: "rgba(76,29,27,.97)",
+      light: 0.78,
+    },
+  };
+  const config = floorConfig[chapter];
+
+  box(root, [18, 0.22, 112], [0, -0.11, -48], materials.tile);
+  box(root, [0.34, 5.1, 112], [-8.85, 2.55, -48], materials.wall);
+  box(root, [0.34, 5.1, 112], [8.85, 2.55, -48], materials.wall);
+  box(root, [18, 0.2, 112], [0, 5.02, -48], materials.concreteDark);
+  box(root, [18, 5.1, 0.34], [0, 2.55, -104], materials.wall);
+  box(root, [18, 5.1, 0.34], [0, 2.55, 8], materials.wall);
+
+  for (let z = 4; z >= -100; z -= 8) {
+    addFluorescent(
+      root,
+      Math.abs(z / 8) % 2 === 0 ? -2.9 : 2.9,
+      z,
+      Math.max(0.58, config.light - (Math.abs(z) % 4) * 0.08),
+    );
+  }
+
+  const mainSign = textPanel(config.sign, "#edf1e8", config.accent);
+  mainSign.position.set(0, 4.22, 5.7);
+  mainSign.scale.set(1.08, 0.92, 1);
+  root.add(mainSign);
+  const subSign = textPanel(config.subSign, "#d8dfd6", config.accent);
+  subSign.position.set(0, 4.08, -95);
+  subSign.scale.set(0.78, 0.7, 1);
+  root.add(subSign);
+
+  for (const side of [-1, 1] as const) {
+    for (let z = -4; z >= -94; z -= 18) {
+      box(root, [4.9, 0.1, 14.6], [side * 6.35, -0.04, z - 6], materials.concrete);
+      box(root, [0.22, 4.5, 14.6], [side * 8.56, 2.25, z - 6], materials.concreteDark);
+      box(root, [3.2, 4.5, 0.2], [side * 6.95, 2.25, z - 13.2], materials.wall);
+      box(root, [1.34, 3.1, 0.16], [side * 7.7, 1.55, z - 0.1], materials.darkGreen);
+      roundedBox(
+        root,
+        [0.62, 1.15, 0.04],
+        [side * 7.7, 2.0, z],
+        materials.glass,
+        0.04,
+      );
+    }
+  }
+
+  for (const [x, z, rotation] of [
+    [-5.7, -14, Math.PI / 2],
+    [5.55, -31, -Math.PI / 2],
+    [-5.5, -52, Math.PI / 2],
+    [5.6, -73, -Math.PI / 2],
+    [-5.45, -91, Math.PI / 2],
+  ] as const) {
+    const bed = hospitalBed(materials, x, z, rotation);
+    root.add(bed);
+    collisions.push({ x, z, radius: 1.18 });
+  }
+  for (const [x, z, rotation] of [
+    [5.65, -18, Math.PI / 2],
+    [-5.8, -39, -Math.PI / 2],
+    [5.7, -61, Math.PI / 2],
+    [-5.6, -82, -Math.PI / 2],
+  ] as const) {
+    root.add(patientMonitor(materials, x, z, rotation));
+    collisions.push({ x, z, radius: 0.68 });
+  }
+  for (const [x, z] of [
+    [-6.5, -25],
+    [6.4, -45],
+    [-6.4, -68],
+    [6.35, -88],
+  ] as const) {
+    root.add(oxygenTank(materials, x, z, x < 0 ? 0.2 : -0.2));
+    collisions.push({ x, z, radius: 0.42 });
+  }
+  for (const [x, z, rotation] of [
+    [-5.7, -20, 0.12],
+    [5.8, -42, -0.18],
+    [-5.6, -66, 0.22],
+    [5.65, -86, -0.16],
+  ] as const) {
+    root.add(ivStand(materials, x, z, rotation));
+  }
+  root.add(
+    medicalCabinet(materials, -8.2, -34, Math.PI / 2),
+    medicalCabinet(materials, 8.2, -58, -Math.PI / 2),
+    fireExtinguisher(materials, -8.34, -74, Math.PI / 2),
+    liquidPuddle("#4b6256", 2.2, -24, 3.2, 0.18),
+    liquidPuddle("#641b17", -2.5, -56, 2.4, -0.34),
+    liquidPuddle("#324e45", 2.8, -84, 2.8, 0.24),
+  );
+
+  if (chapter === "street") {
+    root.add(
+      wheelchair(materials, -4.9, -47, Math.PI / 2),
+      hospitalReception(materials, 6.8, -8),
+    );
+    interactions.push(
+      interactionObject(root, "signal", "Read the ward evacuation board", [-4.6, 0, -18], hospitalWardBoard(materials)),
+      interactionObject(root, "maya", "Help Dr. Maya Singh", [4.8, 0, -48], hospitalSurvivorCot(materials)),
+      interactionObject(root, "orderly", "Free the trapped orderly", [-4.8, 0, -69], hospitalSurvivorCot(materials)),
+      interactionObject(root, "pistol", "Take the security pistol", [5.4, 0, -36], createEquipmentModel("pistol", 0.72)),
+      interactionObject(root, "bike", "Use the service elevator to B1", [0, 0, -99], hospitalElevatorBank(materials, "B1", true)),
+    );
+  } else if (chapter === "station") {
+    root.add(
+      toolBench(materials, -6.7, -16, Math.PI / 2),
+      pharmacyShelf(materials, 7.8, -42, -Math.PI / 2),
+      pharmacyShelf(materials, -7.8, -72, Math.PI / 2),
+    );
+    interactions.push(
+      interactionObject(root, "generator", "Restart emergency power", [-4.8, 0, -18], hospitalPowerConsole(materials)),
+      interactionObject(root, "food", "Pack sealed food for the survivors", [4.7, 0, -38], hospitalFoodCache(materials)),
+      interactionObject(root, "meds", "Take refrigerated antivirals", [-4.7, 0, -59], createEquipmentModel("medkit", 0.86)),
+      interactionObject(root, "bike", "Take the elevator to Floor 3", [0, 0, -99], hospitalElevatorBank(materials, "03", true)),
+    );
+  } else if (chapter === "checkpoint") {
+    root.add(
+      operatingLamp(materials, 0, -47),
+      wheelchair(materials, 5.3, -76, -Math.PI / 2),
+    );
+    interactions.push(
+      interactionObject(root, "checkpoint-radio", "Answer the isolation intercom", [-4.7, 0, -19], createEquipmentModel("radio", 0.82)),
+      interactionObject(root, "fuse", "Replace the pressure-door fuse", [4.8, 0, -43], hospitalPowerConsole(materials)),
+      interactionObject(root, "survivor-family", "Escort the hidden family", [-4.7, 0, -78], hospitalSurvivorCot(materials, true)),
+      interactionObject(root, "checkpoint-gate", "Open the research stairwell", [0, 0, -99], hospitalElevatorBank(materials, "04", false)),
+    );
+  } else if (chapter === "depot") {
+    root.add(
+      pharmacyShelf(materials, -7.7, -20, Math.PI / 2),
+      pharmacyShelf(materials, 7.7, -28, -Math.PI / 2),
+      operatingLamp(materials, -1.8, -55),
+      mutationSpecimenPod(materials, -5.7, -70),
+      mutationSpecimenPod(materials, 5.8, -83),
+    );
+    collisions.push(
+      { x: -5.7, z: -70, radius: 0.9 },
+      { x: 5.8, z: -83, radius: 0.9 },
+    );
+    interactions.push(
+      interactionObject(root, "depot-key", "Recover the pharmacy access card", [-4.8, 0, -18], createEquipmentModel("radio", 0.7)),
+      interactionObject(root, "battery", "Secure the antiviral case", [4.8, 0, -42], createEquipmentModel("medkit", 0.9)),
+      interactionObject(root, "food-cart", "Take nutrition packs", [-4.7, 0, -58], hospitalFoodCache(materials)),
+      interactionObject(root, "bus", "Return to the ground-floor safe wing", [0, 0, -99], hospitalElevatorBank(materials, "G", true)),
+    );
+  } else if (chapter === "escape") {
+    const foodCache = hospitalFoodCache(materials);
+    foodCache.position.set(5.8, 0, -34);
+    const survivorCot = hospitalSurvivorCot(materials, true);
+    survivorCot.position.set(-5.3, 0, -75);
+    root.add(
+      foodCache,
+      survivorCot,
+      wheelchair(materials, -5.6, -38, Math.PI / 2),
+    );
+    const safeDoor = hospitalElevatorBank(materials, "SHELTER 04", true);
+    safeDoor.position.set(0, 0, -102.6);
+    root.add(safeDoor);
+  } else {
+    root.add(
+      mutationSpecimenPod(materials, -5.8, -24),
+      mutationSpecimenPod(materials, 5.8, -48),
+      mutationSpecimenPod(materials, -5.7, -78),
+    );
+    collisions.push(
+      { x: -5.8, z: -24, radius: 0.9 },
+      { x: 5.8, z: -48, radius: 0.9 },
+      { x: -5.7, z: -78, radius: 0.9 },
+    );
+  }
+
+  return {
+    root,
+    collisions,
+    interactions,
+    start: new THREE.Vector3(0, 0, 5.5),
+    bounds: { minX: -8.1, maxX: 8.1, minZ: -101.5, maxZ: 6.5 },
+  };
+}
+
 export function buildWorld(chapter: GameChapter): BuiltWorld {
+  // The previous outdoor builders remain as migration reference while older
+  // save/story branches are retired; no active campaign route calls them.
+  void buildStreet;
+  void buildStation;
+  void buildCheckpoint;
+  void buildDepot;
+  void buildEscape;
+  void buildSurvival;
   const materials = createMaterials();
   const built =
     chapter === "hospital"
       ? buildHospital(materials)
-      : chapter === "street"
-        ? buildStreet(materials)
-        : chapter === "station"
-          ? buildStation(materials)
-          : chapter === "checkpoint"
-            ? buildCheckpoint(materials)
-            : chapter === "depot"
-              ? buildDepot(materials)
-              : chapter === "escape"
-                ? buildEscape(materials)
-                : buildSurvival(materials);
+      : buildHospitalWing(materials, chapter);
   return built;
 }
 

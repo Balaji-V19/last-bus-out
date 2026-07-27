@@ -2,20 +2,20 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Last Bus Out: Road to Haven",
+  title: "Last Bus Out: St. Orison",
   description:
-    "A connected 3D horror-survival journey from an abandoned hospital through a fallen checkpoint and transit depot to the last evacuation bus bound for Haven.",
+    "A connected 3D hospital-horror game about rescuing survivors, suppressing an infection, and containing mutated patients across St. Orison's sealed floors.",
   openGraph: {
-    title: "Last Bus Out: Road to Haven",
+    title: "Last Bus Out: St. Orison",
     description:
-      "Enter a physical 3D world, recover real equipment, rescue a survivor, and cross the city before the route closes.",
+      "Search a sealed hospital for survivors, food, medicine, and a safe room while the containment failure evolves around you.",
     type: "website",
     images: [{ url: "/og.png", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Last Bus Out: Road to Haven",
-    description: "Escape. Rescue. Refuel. Outrun the horde.",
+    title: "Last Bus Out: St. Orison",
+    description: "Search. Rescue. Suppress the infection. Survive the hospital.",
     images: ["/og.png"],
   },
 };

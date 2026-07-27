@@ -29,67 +29,71 @@ type SaveData = {
   step: number;
   health: number;
   medicine: number;
-  fuel: number;
+  infection: number;
+  antivirals: number;
+  food: number;
+  survivors: number;
+  power: number;
   rescued: boolean;
   kills: number;
   ammo: number;
   hasPistol?: boolean;
 };
 
-const SAVE_KEY = "last-bus-out-3d-save-v2";
+const SAVE_KEY = "last-bus-out-st-orison-save-v3";
 
 const CHAPTERS: Record<
   GameChapter,
   { kicker: string; title: string; location: string; description: string }
 > = {
   hospital: {
-    kicker: "Day 04 · 05:42",
-    title: "Wake up",
-    location: "St. Orison Hospital",
+    kicker: "Containment Hour 01 · 05:42",
+    title: "The emergency floor",
+    location: "St. Orison · Ground Floor Emergency",
     description:
-      "Four days after the sirens stopped, the emergency lights are still burning.",
+      "You wake among overturned beds. The doors are sealed, the staff are missing, and something is breathing beyond surgery.",
   },
   street: {
-    kicker: "Day 04 · 06:11",
-    title: "No one came back",
-    location: "Mercy District",
+    kicker: "Containment Hour 02 · 06:11",
+    title: "Voices behind the doors",
+    location: "St. Orison · Floor 2 Patient Ward",
     description:
-      "The evacuation route is blocked. A weak voice is still transmitting nearby.",
+      "The ward intercom still carries human voices. Find the trapped staff before the infected find them first.",
   },
   station: {
-    kicker: "Day 04 · 18:26",
-    title: "Running on empty",
-    location: "Northline Fuel Stop",
+    kicker: "Containment Hour 03 · 06:38",
+    title: "The cold rooms",
+    location: "St. Orison · Basement B1 Services",
     description:
-      "One working pump remains. The generator will bring everything nearby with it.",
+      "Food and temperature-sensitive medicine are spoiling below. Restoring power will wake more than the freezers.",
   },
   checkpoint: {
-    kicker: "Day 04 · 19:18",
-    title: "The convoy died here",
-    location: "Blackwood Evacuation Checkpoint",
+    kicker: "Containment Hour 04 · 07:16",
+    title: "Isolation is open",
+    location: "St. Orison · Floor 3 Isolation",
     description:
-      "Every abandoned vehicle faces south. Whatever happened here came from the direction of Haven.",
+      "The isolation locks failed from the inside. A family is hiding in pediatrics while altered patients roam the ward.",
   },
   depot: {
-    kicker: "Day 04 · 22:41",
-    title: "The last bus",
-    location: "Northline Transit Depot",
+    kicker: "Containment Hour 05 · 08:03",
+    title: "What they made upstairs",
+    location: "St. Orison · Floor 4 Research & Pharmacy",
     description:
-      "Maya knows this depot. One evacuation bus may still run, but something is moving beneath the service floor.",
+      "Research records mention an antiviral trial. The specimens described in those records are no longer in their pods.",
   },
   escape: {
-    kicker: "Day 05 · 00:06",
-    title: "Road of the living",
-    location: "Haven Route 9",
+    kicker: "Containment Hour 06 · 09:12",
+    title: "Bring them home",
+    location: "St. Orison · Ground Floor Safe Wing",
     description:
-      "The bus is carrying everyone you found. Scout the blocked road and keep the route open.",
+      "The survivors are following with the food and medicine. Clear the final corridor and seal Shelter 04 behind them.",
   },
   survival: {
-    kicker: "Day 05 · 00:47",
-    title: "The night watch",
-    location: "Haven Northern Perimeter",
+    kicker: "Containment Hour 07",
+    title: "The quarantine annex",
+    location: "St. Orison · Restricted Annex",
     description:
-      "The route is over, but the perimeter never sleeps. Hold the patrol ground for as long as you can.",
+      "Shelter 04 is safe for now. Hold the annex and keep each new mutation away from the people below.",
   },
 };
 
@@ -99,34 +103,39 @@ const OBJECTIVES: Record<GameChapter, string[]> = {
     "Recover the emergency radio",
     "Take the fire axe",
     "Clear the surgical corridor",
-    "Reset the ambulance-door breaker",
+    "Restore power to Stairwell A",
     "Survive the emergency-wing ambush",
-    "Open the ambulance entrance",
+    "Enter Stairwell A",
   ],
   street: [
-    "Follow the radio signal",
+    "Check the ward survivor board",
     "Reach the trapped paramedic",
-    "Find the motorcycle",
+    "Free the injured orderly",
+    "Take the elevator to Basement B1",
   ],
   station: [
-    "Start the backup generator",
-    "Defend the pump while it fills",
-    "Return to the motorcycle",
+    "Start the basement generator",
+    "Collect sealed food for Shelter 04",
+    "Recover refrigerated antivirals",
+    "Defend the cold-storage circuit",
+    "Take the elevator to Floor 3",
   ],
   checkpoint: [
-    "Search the abandoned command post",
-    "Restore power to the security gate",
-    "Survive the floodlight alarm",
-    "Open the north checkpoint",
+    "Answer the isolation intercom",
+    "Restore the pediatrics door circuit",
+    "Survive the isolation breach",
+    "Escort the hidden family to Stairwell A",
+    "Climb to Floor 4 Research",
   ],
   depot: [
-    "Find the depot foreman's key",
-    "Recover a charged bus battery",
-    "Clear the maintenance floor",
-    "Board the evacuation bus",
+    "Find the pharmacy access card",
+    "Recover the antiviral trial case",
+    "Collect nutrition packs",
+    "Kill the research-floor mutation",
+    "Return to the ground-floor safe wing",
   ],
-  escape: ["Scout ahead of the bus", "Reach the Haven blast gate"],
-  survival: ["Survive the next infected wave"],
+  escape: ["Lead the survivors through the safe wing", "Seal Shelter 04"],
+  survival: ["Contain the next mutation wave"],
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -147,8 +156,9 @@ export function LastBusOutGame() {
   const viewportRef = useRef<GameViewportHandle>(null);
   const audioRef = useRef<SurvivalAudio | null>(null);
   const healthRef = useRef(100);
+  const infectionRef = useRef(12);
   const killsRef = useRef(0);
-  const fuelCompleteRef = useRef(false);
+  const powerCompleteRef = useRef(false);
   const escapeCompleteRef = useRef(false);
   const escapeScoutRef = useRef(false);
   const toastTimerRef = useRef<number | null>(null);
@@ -159,7 +169,11 @@ export function LastBusOutGame() {
   const [health, setHealth] = useState(100);
   const [stamina, setStamina] = useState(100);
   const [medicine, setMedicine] = useState(0);
-  const [fuel, setFuel] = useState(4);
+  const [infection, setInfection] = useState(12);
+  const [antivirals, setAntivirals] = useState(0);
+  const [food, setFood] = useState(0);
+  const [survivors, setSurvivors] = useState(0);
+  const [power, setPower] = useState(4);
   const [rescued, setRescued] = useState(false);
   const [kills, setKills] = useState(0);
   const [ammo, setAmmo] = useState(0);
@@ -213,7 +227,11 @@ export function LastBusOutGame() {
         step: nextStep,
         health,
         medicine,
-        fuel,
+        infection,
+        antivirals,
+        food,
+        survivors,
+        power,
         rescued,
         kills,
         ammo,
@@ -225,14 +243,18 @@ export function LastBusOutGame() {
     },
     [
       ammo,
+      antivirals,
       chapter,
-      fuel,
+      food,
       hasPistol,
       health,
+      infection,
       kills,
       medicine,
+      power,
       rescued,
       step,
+      survivors,
     ],
   );
 
@@ -251,7 +273,7 @@ export function LastBusOutGame() {
       setCombatCombo(0);
       setCombatScore(0);
       setStamina(100);
-      fuelCompleteRef.current = false;
+      powerCompleteRef.current = false;
       escapeCompleteRef.current = false;
       escapeScoutRef.current = false;
       setResetToken((value) => value + 1);
@@ -274,11 +296,16 @@ export function LastBusOutGame() {
   const resetRun = useCallback(() => {
     setWorldReady(false);
     healthRef.current = 100;
+    infectionRef.current = 12;
     killsRef.current = 0;
     setHealth(100);
     setStamina(100);
     setMedicine(0);
-    setFuel(4);
+    setInfection(12);
+    setAntivirals(0);
+    setFood(0);
+    setSurvivors(0);
+    setPower(4);
     setRescued(false);
     setKills(0);
     setAmmo(0);
@@ -286,6 +313,7 @@ export function LastBusOutGame() {
     setCombatCombo(0);
     setCombatScore(0);
     setMode("playing");
+    setHasSave(true);
     setChapter("hospital");
     setStep(0);
     setPrompt(null);
@@ -297,7 +325,7 @@ export function LastBusOutGame() {
     setDread(8);
     setResetToken((value) => value + 1);
     setChapterCard((value) => value + 1);
-    fuelCompleteRef.current = false;
+    powerCompleteRef.current = false;
     escapeCompleteRef.current = false;
     escapeScoutRef.current = false;
     playSound("objective");
@@ -311,11 +339,16 @@ export function LastBusOutGame() {
       return;
     }
     healthRef.current = saved.health;
+    infectionRef.current = saved.infection ?? 12;
     killsRef.current = saved.kills;
     setHealth(saved.health);
     setStamina(100);
     setMedicine(saved.medicine);
-    setFuel(saved.fuel);
+    setInfection(saved.infection ?? 12);
+    setAntivirals(saved.antivirals ?? 0);
+    setFood(saved.food ?? 0);
+    setSurvivors(saved.survivors ?? (saved.rescued ? 1 : 0));
+    setPower(saved.power ?? 4);
     setRescued(saved.rescued);
     setKills(saved.kills);
     setAmmo(saved.ammo ?? 0);
@@ -345,6 +378,16 @@ export function LastBusOutGame() {
     playSound("heal");
   }, [medicine, playSound, showToast]);
 
+  const useAntiviral = useCallback(() => {
+    if (antivirals <= 0 || infectionRef.current <= 0) return;
+    setAntivirals((value) => Math.max(0, value - 1));
+    const nextInfection = clamp(infectionRef.current - 38, 0, 100);
+    infectionRef.current = nextInfection;
+    setInfection(nextInfection);
+    showToast("Antiviral injected · infection suppressed");
+    playSound("heal");
+  }, [antivirals, playSound, showToast]);
+
   const handleInteraction = useCallback(
     (id: string) => {
       playSound("pickup");
@@ -354,13 +397,13 @@ export function LastBusOutGame() {
           showToast("Torch mounted to your belt");
         } else if (id === "radio" && step === 1) {
           advanceStep(2);
-          showToast("Haven Route Nine is still transmitting");
+          showToast("A survivor is calling from Floor 2");
         } else if (id === "axe" && step === 2) {
           advanceStep(3);
           showToast("Fire axe secured · movement ahead");
         } else if (id === "breaker" && step === 4) {
           advanceStep(5);
-          showToast("Ambulance doors powered · something heard the breaker");
+          showToast("Stairwell power restored · something heard the breaker");
           playSound("generator");
         } else if (id === "exit" && step >= 6) {
           loadChapter("street");
@@ -368,52 +411,69 @@ export function LastBusOutGame() {
       } else if (chapter === "street") {
         if (id === "signal" && step === 0) {
           advanceStep(1);
-          showToast("Signal located beyond the police barricade");
+          showToast("Two survivor signals marked on the ward board");
         } else if (id === "maya" && step === 1) {
           setRescued(true);
+          setSurvivors((value) => value + 1);
           advanceStep(2);
-          showToast("Maya joined you");
+          showToast("Maya rescued · she will wait in Stairwell A");
+        } else if (id === "orderly" && step === 2) {
+          setSurvivors((value) => value + 1);
+          advanceStep(3);
+          showToast("Injured orderly rescued · elevator route is clear");
         } else if (id === "pistol" && !hasPistol) {
           setHasPistol(true);
           setAmmo(12);
           showToast("Service pistol recovered · 12 rounds");
-        } else if (id === "bike" && step >= 2) {
-          setFuel(1);
+        } else if (id === "bike" && step >= 3) {
           loadChapter("station");
         }
       } else if (chapter === "station") {
         if (id === "generator" && step === 0) {
           advanceStep(1);
-          showToast("Generator online · the pump is drawing a crowd");
+          showToast("Basement generator online · the freezers are waking");
           playSound("generator");
-        } else if (id === "meds" && medicine === 0) {
-          setMedicine(1);
-          showToast("Trauma kit packed");
-        } else if (id === "bike" && step >= 2) {
-          setFuel(100);
+        } else if (id === "food" && step === 1) {
+          setFood((value) => value + 4);
+          advanceStep(2);
+          showToast("Four sealed food packs collected");
+        } else if (id === "meds" && step === 2) {
+          setAntivirals((value) => value + 2);
+          setMedicine((value) => Math.min(3, value + 1));
+          advanceStep(3);
+          showToast("Two antiviral doses and one trauma kit recovered");
+        } else if (id === "bike" && step >= 4) {
+          setPower(100);
           loadChapter("checkpoint");
         }
       } else if (chapter === "checkpoint") {
         if (id === "checkpoint-radio" && step === 0) {
           advanceStep(1);
-          showToast("Dispatch log: Haven ordered the convoy gates sealed");
+          showToast("A family answers from the locked pediatrics wing");
         } else if (id === "fuse" && step === 1) {
           advanceStep(2);
-          showToast("Gate power restored · floodlights triggered");
+          showToast("Isolation locks released · the ward is moving");
           playSound("generator");
-        } else if (id === "checkpoint-gate" && step >= 3) {
+        } else if (id === "survivor-family" && step === 3) {
+          setSurvivors((value) => value + 2);
+          advanceStep(4);
+          showToast("Family rescued · follow the stairwell markers");
+        } else if (id === "checkpoint-gate" && step >= 4) {
           loadChapter("depot");
         }
       } else if (chapter === "depot") {
         if (id === "depot-key" && step === 0) {
           advanceStep(1);
-          showToast("Foreman's key recovered · Bay 03 unlocked");
+          showToast("Pharmacy access card recovered");
         } else if (id === "battery" && step === 1) {
           advanceStep(2);
-          showToast("Bus battery secured · something heard the metal fall");
-          playSound("generator");
-        } else if (id === "bus" && step >= 3) {
-          setFuel(82);
+          setAntivirals((value) => value + 2);
+          showToast("Antiviral trial case secured · two doses inside");
+        } else if (id === "food-cart" && step === 2) {
+          setFood((value) => value + 3);
+          advanceStep(3);
+          showToast("Three nutrition packs secured · specimen pod opened");
+        } else if (id === "bus" && step >= 4) {
           loadChapter("escape");
         }
       }
@@ -423,7 +483,6 @@ export function LastBusOutGame() {
       chapter,
       hasPistol,
       loadChapter,
-      medicine,
       playSound,
       showToast,
       step,
@@ -444,6 +503,21 @@ export function LastBusOutGame() {
     [setMode, showToast],
   );
 
+  const handleInfection = useCallback(
+    (amount: number) => {
+      const next = clamp(infectionRef.current + amount, 0, 100);
+      infectionRef.current = next;
+      setInfection(next);
+      if (next >= 100) {
+        setMode("paused");
+        showToast("The infection took over · restart from the emergency floor");
+      } else if (next >= 72 && infectionRef.current - amount < 72) {
+        showToast("Critical infection · use an antiviral dose");
+      }
+    },
+    [showToast],
+  );
+
   const handleKill = useCallback(() => {
     const nextKills = killsRef.current + 1;
     killsRef.current = nextKills;
@@ -462,16 +536,16 @@ export function LastBusOutGame() {
   const handleEncounterCleared = useCallback(() => {
     if (chapter === "hospital" && step === 3) {
       advanceStep(4);
-      showToast("Surgical corridor clear · reach the emergency wing");
+      showToast("Surgical corridor clear · reach Stairwell A");
     } else if (chapter === "hospital" && step === 5) {
       advanceStep(6);
-      showToast("Emergency wing clear · ambulance entrance unlocked");
+      showToast("Emergency wing clear · Stairwell A unlocked");
     } else if (chapter === "checkpoint" && step === 2) {
       advanceStep(3);
-      showToast("Floodlight yard clear · north gate controls available");
-    } else if (chapter === "depot" && step === 2) {
-      advanceStep(3);
-      showToast("Maintenance floor clear · the evacuation bus is ready");
+      showToast("Isolation breach contained · find the hidden family");
+    } else if (chapter === "depot" && step === 3) {
+      advanceStep(4);
+      showToast("Research mutation killed · return everyone to Shelter 04");
     }
   }, [advanceStep, chapter, showToast, step]);
 
@@ -480,14 +554,14 @@ export function LastBusOutGame() {
       setFuelProgress(value);
       if (
         chapter === "station" &&
-        step === 1 &&
+        step === 3 &&
         value >= 0.999 &&
-        !fuelCompleteRef.current
+        !powerCompleteRef.current
       ) {
-        fuelCompleteRef.current = true;
-        setFuel(100);
-        advanceStep(2);
-        showToast("Tank full · get back to the motorcycle");
+        powerCompleteRef.current = true;
+        setPower(100);
+        advanceStep(4);
+        showToast("Cold storage stabilized · take the elevator to Floor 3");
       }
     },
     [advanceStep, chapter, showToast, step],
@@ -504,7 +578,7 @@ export function LastBusOutGame() {
       ) {
         escapeScoutRef.current = true;
         advanceStep(1);
-        showToast("The bus is following · reach the Haven blast gate");
+        showToast("The survivors are following · Shelter 04 is ahead");
       }
       if (value >= 0.985 && !escapeCompleteRef.current) {
         escapeCompleteRef.current = true;
@@ -527,18 +601,21 @@ export function LastBusOutGame() {
 
   const startEndlessSurvival = useCallback(() => {
     healthRef.current = 100;
+    infectionRef.current = Math.min(infectionRef.current, 35);
     setHealth(100);
+    setInfection((value) => Math.min(value, 35));
     setStamina(100);
     setMedicine((value) => Math.max(1, value));
-    setFuel(100);
+    setPower(100);
     setMode("playing");
     loadChapter("survival");
     window.setTimeout(
       () =>
         saveGame("survival", 0, {
           health: 100,
+          infection: Math.min(infectionRef.current, 35),
           medicine: Math.max(1, medicine),
-          fuel: 100,
+          power: 100,
         }),
       0,
     );
@@ -558,6 +635,41 @@ export function LastBusOutGame() {
     const timer = window.setTimeout(() => setHasSave(Boolean(getSave())), 0);
     return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (mode !== "playing" || typeof window === "undefined") return;
+    const payload: SaveData = {
+      chapter,
+      step,
+      health,
+      medicine,
+      infection,
+      antivirals,
+      food,
+      survivors,
+      power,
+      rescued,
+      kills,
+      ammo,
+      hasPistol,
+    };
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
+  }, [
+    ammo,
+    antivirals,
+    chapter,
+    food,
+    hasPistol,
+    health,
+    infection,
+    kills,
+    medicine,
+    mode,
+    power,
+    rescued,
+    step,
+    survivors,
+  ]);
 
   useEffect(() => {
     if (mode !== "menu") return;
@@ -592,7 +704,11 @@ export function LastBusOutGame() {
     const chapterThreat =
       chapter === "survival"
         ? clamp(0.48 + survivalRemaining * 0.045, 0.48, 1)
-        : clamp(0.48 + (100 - health) / 180, 0.48, 0.92);
+        : clamp(
+            0.48 + (100 - health) / 220 + infection / 280,
+            0.48,
+            0.96,
+          );
     const threat = clamp(
       Math.max(chapterThreat, 0.38 + dread / 115),
       0.48,
@@ -602,7 +718,7 @@ export function LastBusOutGame() {
       chapter,
       mode === "paused" ? threat * 0.38 : threat,
     );
-  }, [chapter, dread, health, mode, soundOn, survivalRemaining]);
+  }, [chapter, dread, health, infection, mode, soundOn, survivalRemaining]);
 
   useEffect(
     () => () => {
@@ -662,6 +778,7 @@ export function LastBusOutGame() {
             onPromptChange={setPrompt}
             onStaminaChange={setStamina}
             onDamage={handleDamage}
+            onInfection={handleInfection}
             onKill={handleKill}
             onAmmoUsed={() => setAmmo((value) => Math.max(0, value - 1))}
             onCombatProgress={(combo, score) => {
@@ -693,7 +810,7 @@ export function LastBusOutGame() {
               <span className="route-mark" />
               <span>
                 <strong>Last Bus Out</strong>
-                <small>{chapterInfo.location} · 3D field build</small>
+                <small>{chapterInfo.location} · Hospital containment</small>
               </span>
             </div>
             <div className="objective" aria-live="polite">
@@ -732,6 +849,16 @@ export function LastBusOutGame() {
                 <span className="bar-fill stamina" style={{ width: `${stamina}%` }} />
               </span>
               <span>{Math.round(stamina)}</span>
+            </div>
+            <div className="bar-row infection-row">
+              <span>Infection</span>
+              <span className="bar-track">
+                <span
+                  className="bar-fill infection"
+                  style={{ width: `${infection}%` }}
+                />
+              </span>
+              <span>{Math.round(infection)}%</span>
             </div>
             <div className="bar-row dread-row">
               <span>Dread</span>
@@ -778,6 +905,16 @@ export function LastBusOutGame() {
                   <small>Med {medicine}</small>
                 </button>
               )}
+              {antivirals > 0 && (
+                <button
+                  className="equipment-slot actionable antiviral-slot"
+                  onClick={useAntiviral}
+                  title="Inject an antiviral dose to suppress infection"
+                >
+                  <span className="equipment-icon item-antiviral" aria-hidden="true" />
+                  <small>Anti {antivirals}</small>
+                </button>
+              )}
               {inventory.pistol && (
                 <div className="equipment-slot" title="Holstered service pistol">
                   <span className="equipment-icon item-pistol" aria-hidden="true" />
@@ -785,11 +922,16 @@ export function LastBusOutGame() {
                 </div>
               )}
               {inventory.fuel && (
-                <div className="equipment-slot" title="Fuel reserve">
+                <div className="equipment-slot" title="Hospital emergency power">
                   <span className="equipment-icon item-fuel" aria-hidden="true" />
-                  <small>{fuel}%</small>
+                  <small>Power {power}%</small>
                 </div>
               )}
+            </div>
+            <div className="rescue-readout">
+              <span>{survivors} survivors</span>
+              <span>{food} food packs</span>
+              <span>{antivirals} antivirals</span>
             </div>
           </div>
 
@@ -805,10 +947,10 @@ export function LastBusOutGame() {
             </button>
           )}
 
-          {chapter === "station" && step === 1 && (
+          {chapter === "station" && step === 3 && (
             <div className="fuel-meter">
               <div className="fuel-head">
-                <span>Fuel transfer</span>
+                <span>Cold-storage power</span>
                 <strong>{Math.round(fuelProgress * 100)}%</strong>
               </div>
               <div className="fuel-track">
@@ -820,8 +962,8 @@ export function LastBusOutGame() {
           {chapter === "escape" && (
             <div className="fuel-meter">
               <div className="fuel-head">
-                <span>Distance to Haven</span>
-                <strong>{Math.max(0, Math.ceil((1 - escapeProgress) * 5.2))} km</strong>
+                <span>Distance to Shelter 04</span>
+                <strong>{Math.max(0, Math.ceil((1 - escapeProgress) * 94))} m</strong>
               </div>
               <div className="fuel-track">
                 <span style={{ width: `${escapeProgress * 100}%` }} />
@@ -832,11 +974,11 @@ export function LastBusOutGame() {
           {chapter === "survival" && (
             <div className="fuel-meter survival-meter">
               <div className="fuel-head">
-                <span>Night-watch wave</span>
+                <span>Containment wave</span>
                 <strong>{survivalWave}</strong>
               </div>
               <div className="survival-stats">
-                <span>{survivalRemaining} infected active</span>
+                <span>{survivalRemaining} mutations active</span>
                 <span>
                   {Math.floor(survivalTime / 60)
                     .toString()
@@ -890,13 +1032,13 @@ export function LastBusOutGame() {
             <div className="eyebrow">Original three-dimensional survival game</div>
             <h1 className="game-title">
               Last Bus Out
-              <span>Road to Haven</span>
+              <span>St. Orison</span>
             </h1>
             <p className="menu-copy">
-              Wake inside St. Orison, cross the dead city, uncover why Haven
-              sealed its checkpoint, and recover the last evacuation bus. Six
-              connected story chapters escalate from vulnerable exploration to convoy
-              survival, followed by an endless night watch.
+              Wake inside a sealed hospital and descend into its containment
+              failure. Search connected floors for survivors, food, power, and
+              antivirals while ordinary infected give way to research mutations.
+              Reach Shelter 04 before the infection reaches your bloodstream.
             </p>
             <div className="menu-actions">
               <button
@@ -906,7 +1048,7 @@ export function LastBusOutGame() {
                 onPointerEnter={() => void loadGameViewport()}
                 onTouchStart={() => void loadGameViewport()}
               >
-                Begin the escape
+                Enter St. Orison
               </button>
               {hasSave && (
                 <button
@@ -937,9 +1079,9 @@ export function LastBusOutGame() {
       {mode !== "menu" && !worldReady && (
         <section className="loading-screen" aria-live="polite" aria-busy="true">
           <div className="loading-card">
-            <div className="eyebrow">Preparing the route</div>
+            <div className="eyebrow">Opening the hospital</div>
             <h2>Entering {chapterInfo.location}</h2>
-            <p>Loading the world and survivor rigs…</p>
+            <p>Loading the floor, survivor rigs, and containment state…</p>
             <span className="loading-track" aria-hidden="true">
               <span />
             </span>
@@ -950,16 +1092,22 @@ export function LastBusOutGame() {
       {mode === "paused" && (
         <section className="pause-screen">
           <div className="pause-card">
-            <div className="eyebrow">Route suspended</div>
-            <h2>{health <= 0 ? "You went down" : "Paused"}</h2>
+            <div className="eyebrow">Containment suspended</div>
+            <h2>
+              {infection >= 100
+                ? "The infection took over"
+                : health <= 0
+                  ? "You went down"
+                  : "Paused"}
+            </h2>
             <p>
-              The world remains exactly where you left it. Camera movement, character
-              animation, enemies, and the fuel timer are stopped.
+              The floor remains exactly where you left it. Movement, animation,
+              enemies, lighting events, and objective timers are stopped.
             </p>
             <div className="pause-actions">
-              {health > 0 && (
+              {health > 0 && infection < 100 && (
                 <button className="primary-button" onClick={() => setMode("playing")}>
-                  Return to the road
+                  Return to the hospital
                 </button>
               )}
               {medicine > 0 && health < 100 && (
@@ -967,7 +1115,12 @@ export function LastBusOutGame() {
                   Use trauma kit · {medicine} left
                 </button>
               )}
-              {health <= 0 && (
+              {antivirals > 0 && infection > 0 && infection < 100 && (
+                <button className="secondary-button" onClick={useAntiviral}>
+                  Use antiviral · {antivirals} left
+                </button>
+              )}
+              {(health <= 0 || infection >= 100) && (
                 <button
                   className="primary-button"
                   onClick={
@@ -975,8 +1128,8 @@ export function LastBusOutGame() {
                   }
                 >
                   {chapter === "survival"
-                    ? "Restart night watch"
-                    : "Restart route"}
+                    ? "Restart containment"
+                    : "Restart hospital"}
                 </button>
               )}
               <button
@@ -996,24 +1149,25 @@ export function LastBusOutGame() {
       {mode === "ending" && (
         <section className="ending-screen">
           <div className="ending-card">
-            <div className="eyebrow">Haven northern gate reached · Day 05</div>
-            <h2>The last bus arrived.<br />Haven did not open.</h2>
+            <div className="eyebrow">Shelter 04 sealed · Containment Hour 06</div>
+            <h2>The survivors are inside.<br />The hospital is not empty.</h2>
             <p>
-              The radio message was real, but Haven sealed its northern gate
-              before the convoy fell. Maya and the people aboard the bus now
-              depend on you to hold the perimeter until daylight.
+              The food will last a little while, and the antiviral bought you
+              time. Maya has locked the safe-room doors, but the restricted
+              annex is still feeding new mutations into the floors above.
             </p>
             <div className="run-stats">
               <div><strong>{kills}</strong><span>Infected stopped</span></div>
-              <div><strong>{rescued ? "1" : "0"}</strong><span>Survivors found</span></div>
-              <div><strong>{Math.round(health)}</strong><span>Health remaining</span></div>
+              <div><strong>{survivors}</strong><span>Survivors found</span></div>
+              <div><strong>{food}</strong><span>Food packs delivered</span></div>
+              <div><strong>{Math.round(infection)}%</strong><span>Infection remaining</span></div>
             </div>
             <div className="menu-actions">
               <button
                 className="primary-button"
                 onClick={startEndlessSurvival}
               >
-                Continue into endless survival
+                Defend the quarantine annex
               </button>
               <button className="secondary-button" onClick={resetRun}>
                 Run the story again
