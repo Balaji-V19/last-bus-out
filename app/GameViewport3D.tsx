@@ -494,6 +494,21 @@ export const GameViewport3D = forwardRef<
     let kickYaw = 0;
     let lastStrideSign = 1;
     let dragPointer: { id: number; x: number; y: number } | null = null;
+
+    // Stereo placement for a world position, relative to where the player is
+    // facing. Every sound cue used to pan on raw world X, which meant the
+    // stereo image did not rotate with the camera: turning 180 degrees left a
+    // growl on the same ear, and anything directly ahead or behind collapsed to
+    // centre. Projecting onto the camera's right vector and normalising by
+    // distance gives the sine of the bearing, which is what the ear expects.
+    const panScratch = new THREE.Vector3();
+    const panFor = (position: THREE.Vector3, limit = 0.92) => {
+      panScratch.copy(position).sub(playerRoot.position);
+      const distance = Math.max(0.6, panScratch.length());
+      const lateral =
+        panScratch.x * Math.cos(cameraYaw) - panScratch.z * Math.sin(cameraYaw);
+      return THREE.MathUtils.clamp(lateral / distance, -limit, limit);
+    };
     let attack = 0;
     let attackHit = false;
     let gunRecoil = 0;
@@ -673,20 +688,12 @@ export const GameViewport3D = forwardRef<
         });
         propsRef.current.onSound("zombie-growl", {
           intensity: THREE.MathUtils.clamp(1.08 - spawnDistance / 38, 0.32, 0.96),
-          pan: THREE.MathUtils.clamp(
-            (root.position.x - playerRoot.position.x) / 14,
-            -0.9,
-            0.9,
-          ),
+          pan: panFor(root.position, 0.9),
         });
       }
       propsRef.current.onSound("zombie-alert", {
         intensity: THREE.MathUtils.clamp(1 - spawnDistance / 42, 0.14, 0.72),
-        pan: THREE.MathUtils.clamp(
-          (root.position.x - playerRoot.position.x) / 18,
-          -0.9,
-          0.9,
-        ),
+        pan: panFor(root.position, 0.9),
       });
       void createAnimatedCharacter(style).then((character) => {
         if (disposed || !enemies.includes(actor)) {
@@ -759,11 +766,7 @@ export const GameViewport3D = forwardRef<
       }
       current.onSound("zombie-hit", {
         intensity: baseDamage >= 50 ? 1.05 : 0.78,
-        pan: THREE.MathUtils.clamp(
-          (enemy.root.position.x - playerRoot.position.x) / 8,
-          -0.85,
-          0.85,
-        ),
+        pan: panFor(enemy.root.position, 0.85),
       });
       if (enemy.hp <= 0) {
         enemy.dying = true;
@@ -773,11 +776,7 @@ export const GameViewport3D = forwardRef<
         combatScore += Math.round(120 * (1 + combo * 0.12));
         current.onCombatProgress(combo, combatScore);
         current.onSound("zombie-death", {
-          pan: THREE.MathUtils.clamp(
-            (enemy.root.position.x - playerRoot.position.x) / 10,
-            -0.85,
-            0.85,
-          ),
+          pan: panFor(enemy.root.position, 0.85),
         });
         current.onKill();
       }
@@ -1593,20 +1592,12 @@ export const GameViewport3D = forwardRef<
                   : enemy.character?.style === "heavy"
                     ? 1.2
                     : 0.86,
-              pan: THREE.MathUtils.clamp(
-                (enemy.root.position.x - playerRoot.position.x) / 7,
-                -0.9,
-                0.9,
-              ),
+              pan: panFor(enemy.root.position, 0.9),
             });
             if (lightFailure > 0) {
               current.onSound("zombie-growl", {
                 intensity: enemy.character?.style === "heavy" ? 1.2 : 1.02,
-                pan: THREE.MathUtils.clamp(
-                  (enemy.root.position.x - playerRoot.position.x) / 7,
-                  -0.9,
-                  0.9,
-                ),
+                pan: panFor(enemy.root.position, 0.9),
               });
             }
             current.onSound("player-hit", {
@@ -1954,11 +1945,7 @@ export const GameViewport3D = forwardRef<
                 0.16,
                 0.9,
               ),
-              pan: THREE.MathUtils.clamp(
-                (nearest.root.position.x - playerRoot.position.x) / 16,
-                -0.9,
-                0.9,
-              ),
+              pan: panFor(nearest.root.position, 0.9),
             },
           );
           zombieVoiceClock =
