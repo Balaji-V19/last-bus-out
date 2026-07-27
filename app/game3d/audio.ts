@@ -1,3 +1,10 @@
+import {
+  renderImpact,
+  renderVoice,
+  VOICE_SAMPLE_RATE,
+  type VoiceKind,
+} from "./voice";
+
 export type GameSoundEvent =
   | "footstep"
   | "attack-swing"
@@ -66,6 +73,14 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
+/**
+ * How many variants of each vocalisation are baked. Repetition is the second
+ * biggest "that is a game sound" tell after perfect periodicity — the ear locks
+ * onto an identical spectrum within two or three plays — so each event draws
+ * from a small pool rather than replaying one buffer.
+ */
+const VOICE_VARIANTS = 4;
+
 export class SurvivalAudio {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -124,6 +139,72 @@ export class SurvivalAudio {
       void this.context.resume();
     }
     return this.context;
+  }
+
+  /**
+   * Baked vocalisation buffers, keyed by voice kind. Generated once on first
+   * use — never on a trigger, since rendering a second of glottal source
+   * through a formant bank is milliseconds of work that must not land in a
+   * frame where something is attacking the player.
+   */
+  private voiceBank = new Map<string, AudioBuffer[]>();
+  private voiceCursor = new Map<string, number>();
+
+  private getVoices(context: AudioContext, kind: VoiceKind | "impact") {
+    const cached = this.voiceBank.get(kind);
+    if (cached) return cached;
+    const buffers: AudioBuffer[] = [];
+    for (let variant = 0; variant < VOICE_VARIANTS; variant += 1) {
+      const seed = 101 + variant * 37 + kind.length * 11;
+      const samples =
+        kind === "impact"
+          ? renderImpact(seed, { heavy: variant % 2 === 1 })
+          : renderVoice(kind, seed);
+      const buffer = context.createBuffer(
+        1,
+        samples.length,
+        VOICE_SAMPLE_RATE,
+      );
+      buffer.getChannelData(0).set(samples);
+      buffers.push(buffer);
+    }
+    this.voiceBank.set(kind, buffers);
+    return buffers;
+  }
+
+  /**
+   * Plays one vocalisation. A shuffle-style cursor rather than Math.random, so
+   * the same variant cannot come up twice in a row — which is precisely the
+   * case a listener notices.
+   */
+  private playVoice(
+    kind: VoiceKind | "impact",
+    volume: number,
+    pan: number,
+    detune = 0.06,
+  ) {
+    const context = this.ensureContext();
+    if (!context) return;
+    const buffers = this.getVoices(context, kind);
+    const cursor = (this.voiceCursor.get(kind) ?? 0) + 1 +
+      Math.floor(Math.random() * (buffers.length - 1));
+    const index = cursor % buffers.length;
+    this.voiceCursor.set(kind, index);
+
+    const source = context.createBufferSource();
+    source.buffer = buffers[index];
+    source.playbackRate.value = 1 + (Math.random() * 2 - 1) * detune;
+    const gain = context.createGain();
+    gain.gain.value = volume;
+    const output = this.output(context, pan);
+    source.connect(gain);
+    gain.connect(output);
+    source.start();
+    source.onended = () => {
+      source.disconnect();
+      gain.disconnect();
+      output.disconnect();
+    };
   }
 
   private getNoise(context: AudioContext) {
@@ -361,38 +442,32 @@ export class SurvivalAudio {
 
     // The zombie voice family carries most of the game's threat information, so
     // it sits well forward in the mix rather than under the score.
+    // Creature voices are now baked glottal-source vocalisations rather than
+    // stacked oscillators. See voice.ts for why.
     if (event === "zombie-alert") {
-      this.tone(104, 0.68, 0.132 * intensity, "sawtooth", pan, 48);
-      this.tone(71, 0.74, 0.092 * intensity, "triangle", pan, 43, 0.035);
-      this.noiseBurst(0.5, 0.056 * intensity, "lowpass", 560, pan, 0.04, 170);
+      this.playVoice("alert", 0.5 * intensity, pan);
       return;
     }
 
     if (event === "zombie-growl") {
-      this.tone(74, 0.48, 0.162 * intensity, "sawtooth", pan, 39);
-      this.tone(51, 0.62, 0.116 * intensity, "triangle", pan, 31, 0.045);
-      this.noiseBurst(0.36, 0.138 * intensity, "bandpass", 430, pan, 0.025, 185);
-      this.noiseBurst(0.12, 0.053 * intensity, "highpass", 2600, pan, 0.16);
+      this.playVoice("growl", 0.62 * intensity, pan);
       return;
     }
 
     if (event === "zombie-attack") {
-      this.tone(128, 0.28, 0.15 * intensity, "sawtooth", pan, 63);
-      this.noiseBurst(0.2, 0.175 * intensity, "bandpass", 840, pan, 0.03, 210);
+      this.playVoice("impact", 0.72 * intensity, pan, 0.1);
+      this.playVoice("lunge", 0.4 * intensity, pan);
       return;
     }
 
     if (event === "zombie-hit") {
-      this.tone(82, 0.15, 0.13 * intensity, "sine", pan, 39);
-      this.noiseBurst(0.18, 0.17 * intensity, "lowpass", 680, pan, 0, 160);
-      this.noiseBurst(0.08, 0.035 * intensity, "highpass", 2100, pan, 0.018);
+      this.playVoice("impact", 0.8 * intensity, pan, 0.12);
       return;
     }
 
     if (event === "zombie-death") {
-      this.tone(92, 0.82, 0.14 * intensity, "sawtooth", pan, 31);
-      this.tone(58, 0.9, 0.076 * intensity, "triangle", pan, 25, 0.04);
-      this.noiseBurst(0.25, 0.07 * intensity, "lowpass", 360, pan, 0.58, 90);
+      this.playVoice("breath", 0.72 * intensity, pan, 0.14);
+      this.playVoice("growl", 0.4 * intensity, pan, 0.16);
       return;
     }
 
@@ -400,27 +475,20 @@ export class SurvivalAudio {
     // pitch so it reads as "something is about to happen" rather than as
     // another growl in the mix.
     if (event === "zombie-lunge") {
-      this.tone(96, 0.3, 0.185 * intensity, "sawtooth", pan, 188);
-      this.tone(143, 0.26, 0.105 * intensity, "square", pan, 260, 0.02);
-      this.noiseBurst(0.26, 0.155 * intensity, "bandpass", 520, pan, 0, 1450);
+      this.playVoice("lunge", 0.78 * intensity, pan);
       return;
     }
 
     // Wet, close-range breathing. Only ever triggered by proximity, so hearing
     // it at all means something is near enough to matter.
     if (event === "zombie-breath") {
-      this.noiseBurst(0.42, 0.115 * intensity, "bandpass", 620, pan, 0, 300);
-      this.noiseBurst(0.3, 0.074 * intensity, "bandpass", 240, pan, 0.4, 420);
-      this.tone(58, 0.34, 0.05 * intensity, "triangle", pan, 44, 0.05);
+      this.playVoice("breath", 0.55 * intensity, pan, 0.1);
       return;
     }
 
     // Runner acquiring the player. Deliberately the loudest thing in the game.
     if (event === "zombie-scream") {
-      this.tone(320, 0.62, 0.2 * intensity, "sawtooth", pan, 128);
-      this.tone(196, 0.7, 0.145 * intensity, "square", pan, 92, 0.03);
-      this.tone(742, 0.4, 0.07 * intensity, "sawtooth", pan, 410, 0.015);
-      this.noiseBurst(0.55, 0.128 * intensity, "bandpass", 1350, pan, 0, 480);
+      this.playVoice("scream", 0.82 * intensity, pan, 0.05);
       return;
     }
 
@@ -445,8 +513,11 @@ export class SurvivalAudio {
     }
 
     if (event === "player-hit") {
-      this.tone(63, 0.2, 0.095 * intensity, "sine", pan, 34);
-      this.noiseBurst(0.19, 0.08 * intensity, "bandpass", 520, pan, 0, 125);
+      // The player is a person: an involuntary grunt plus the impact on their
+      // own body, not a filtered thud.
+      this.playVoice("pain", 0.78 * intensity, 0);
+      this.playVoice("impact", 0.6 * intensity, 0, 0.1);
+      if (Math.random() < 0.35) this.playVoice("gasp", 0.5 * intensity, 0);
       return;
     }
 
