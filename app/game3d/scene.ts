@@ -55,6 +55,7 @@ type MaterialSet = {
   concreteDark: THREE.MeshStandardMaterial;
   wall: THREE.MeshStandardMaterial;
   tile: THREE.MeshStandardMaterial;
+  ceilingTile: THREE.MeshStandardMaterial;
   metal: THREE.MeshStandardMaterial;
   rust: THREE.MeshStandardMaterial;
   glass: THREE.MeshPhysicalMaterial;
@@ -209,6 +210,13 @@ function createMaterials(): MaterialSet {
       color: 0x39413b,
       roughness: 1,
     }),
+    // Mineral-fibre ceiling tile: matte, slightly warm, water-stained by the
+    // same fleck texture used on the walls.
+    ceilingTile: new THREE.MeshStandardMaterial({
+      map: tileTexture.clone(),
+      color: 0x9a9c8e,
+      roughness: 0.98,
+    }),
     paintedMetal: new THREE.MeshStandardMaterial({
       color: 0x58625d,
       roughness: 0.55,
@@ -313,21 +321,43 @@ function addFluorescent(
   // the legacy corridor builder keeps the fixed 4.58 m it was authored against.
   height = 4.58,
 ) {
+  // Recessed 1200 x 300 troffer sitting in the ceiling grid, rather than the
+  // surface-mounted slab this used to be: a steel housing, two visible tubes,
+  // and a prismatic diffuser under them.
   const housing = new THREE.Mesh(
-    new THREE.BoxGeometry(1.9, 0.08, 0.42),
-    new THREE.MeshStandardMaterial({ color: 0x555b57, roughness: 0.5 }),
+    new THREE.BoxGeometry(1.2, 0.09, 0.3),
+    new THREE.MeshStandardMaterial({ color: 0x4c524e, roughness: 0.55 }),
   );
-  housing.position.set(x, height, z);
+  housing.position.set(x, height + 0.03, z);
   parent.add(housing);
+
+  const tubeMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf2f6e6,
+    emissive: 0xdde8cd,
+    emissiveIntensity: 3.8,
+  });
+  for (const offset of [-0.07, 0.07]) {
+    const tube = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.018, 0.018, 1.12, 8),
+      tubeMaterial,
+    );
+    tube.rotation.z = Math.PI / 2;
+    tube.position.set(x, height - 0.012, z + offset);
+    parent.add(tube);
+  }
+
   const panel = new THREE.Mesh(
-    new THREE.BoxGeometry(1.65, 0.035, 0.27),
+    new THREE.BoxGeometry(1.14, 0.014, 0.25),
     new THREE.MeshStandardMaterial({
       color: 0xeef3df,
       emissive: 0xdde8cd,
-      emissiveIntensity: 3.8,
+      emissiveIntensity: 2.4,
+      transparent: true,
+      opacity: 0.62,
+      roughness: 0.42,
     }),
   );
-  panel.position.set(x, height - 0.05, z);
+  panel.position.set(x, height - 0.042, z);
   parent.add(panel);
   // With the interior sun removed these fittings are the only general light, so
   // they carry more of the exposure than they used to. Reach is extended past
@@ -335,34 +365,84 @@ function addFluorescent(
   // reads as a gap in the ceiling rather than a dim corridor.
   const lampIntensity = intensity * 2.35;
   const light = new THREE.PointLight(0xdcebd2, lampIntensity, 17, 2);
-  light.position.set(x, height - 0.38, z);
+  light.position.set(x, height - 0.22, z);
   light.castShadow = false;
   light.userData.baseIntensity = lampIntensity;
   light.userData.flicker = true;
   parent.add(light);
 }
 
+/**
+ * Ward bed at real dimensions: 2200 x 990 mm platform, mattress top at 600 mm,
+ * four-section articulated deck, drop-side rails and 125 mm braked castors.
+ *
+ * The rails matter more than anything else here — they are the silhouette that
+ * says "hospital bed" rather than "table", and the previous version had none.
+ */
 function hospitalBed(materials: MaterialSet, x: number, z: number, rotation = 0) {
   const bed = new THREE.Group();
   bed.position.set(x, 0, z);
   bed.rotation.y = rotation;
-  box(bed, [2.1, 0.12, 0.88], [0, 0.72, 0], materials.metal);
-  box(bed, [1.94, 0.16, 0.78], [0, 0.86, 0], materials.white);
-  box(bed, [0.48, 0.18, 0.68], [-0.64, 1.02, 0], materials.fabric, [0, 0, -0.08]);
-  box(bed, [0.08, 0.72, 0.9], [-1.04, 1.02, 0], materials.metal);
-  box(bed, [0.08, 0.5, 0.9], [1.04, 0.94, 0], materials.metal);
-  for (const px of [-0.88, 0.88]) {
-    for (const pz of [-0.31, 0.31]) {
-      cylinder(bed, [0.08, 0.08], 0.62, [px, 0.38, pz], materials.metal);
+
+  // Chassis and lifting column.
+  box(bed, [1.92, 0.1, 0.72], [0, 0.3, 0], materials.paintedMetal);
+  box(bed, [0.24, 0.28, 0.4], [0, 0.44, 0], materials.metal);
+
+  // Four-section deck: back rest raised, seat flat, thigh and calf breaking
+  // down toward the foot. Sections are separate so the profile is not one slab.
+  box(bed, [0.62, 0.06, 0.9], [-0.72, 0.66, 0], materials.metal, [0, 0, -0.26]);
+  box(bed, [0.5, 0.06, 0.9], [-0.16, 0.6, 0], materials.metal);
+  box(bed, [0.44, 0.06, 0.9], [0.31, 0.598, 0], materials.metal, [0, 0, 0.08]);
+  box(bed, [0.5, 0.06, 0.9], [0.79, 0.566, 0], materials.metal, [0, 0, 0.14]);
+
+  // Mattress, following the deck.
+  box(bed, [0.6, 0.13, 0.84], [-0.72, 0.735, 0], materials.white, [0, 0, -0.26]);
+  box(bed, [0.5, 0.13, 0.84], [-0.16, 0.675, 0], materials.white);
+  box(bed, [0.44, 0.13, 0.84], [0.31, 0.672, 0], materials.white, [0, 0, 0.08]);
+  box(bed, [0.5, 0.13, 0.84], [0.79, 0.64, 0], materials.white, [0, 0, 0.14]);
+
+  // Rumpled sheet and pillow.
+  box(bed, [0.86, 0.05, 0.86], [0.34, 0.73, 0.02], materials.fabric, [0, 0.06, 0.05]);
+  box(bed, [0.44, 0.14, 0.56], [-0.78, 0.83, 0.03], materials.fabric, [0, 0.12, -0.22]);
+
+  // Drop-side rails: two per side, 1050 mm long, top edge at about 950 mm.
+  for (const side of [-1, 1]) {
+    for (const railX of [-0.52, 0.5]) {
+      box(bed, [0.96, 0.045, 0.035], [railX, 0.93, side * 0.45], materials.metal);
+      box(bed, [0.96, 0.03, 0.03], [railX, 0.8, side * 0.45], materials.metal);
+      for (const postX of [-0.44, 0.44]) {
+        box(
+          bed,
+          [0.035, 0.34, 0.03],
+          [railX + postX, 0.78, side * 0.45],
+          materials.metal,
+        );
+      }
+    }
+  }
+
+  // Head and foot boards, foot board lower as it always is.
+  box(bed, [0.055, 0.46, 0.9], [-1.06, 0.86, 0], materials.paintedMetal);
+  box(bed, [0.055, 0.34, 0.9], [1.06, 0.8, 0], materials.paintedMetal);
+  // Chart holder on the foot board.
+  box(bed, [0.03, 0.2, 0.3], [1.1, 0.72, 0.16], materials.white, [0, 0, -0.22]);
+
+  for (const px of [-0.82, 0.82]) {
+    for (const pz of [-0.29, 0.29]) {
+      cylinder(bed, [0.045, 0.045], 0.24, [px, 0.18, pz], materials.metal, undefined, 10);
+      // 125 mm castor in a fork, with a brake lever.
+      box(bed, [0.05, 0.1, 0.08], [px, 0.1, pz], materials.metal);
       const wheel = cylinder(
         bed,
-        [0.12, 0.12],
-        0.07,
-        [px, 0.08, pz],
+        [0.0625, 0.0625],
+        0.045,
+        [px, 0.0625, pz],
         materials.rubber,
         [Math.PI / 2, 0, 0],
+        14,
       );
       wheel.castShadow = true;
+      box(bed, [0.11, 0.02, 0.02], [px + 0.05, 0.05, pz], materials.yellow, [0, 0, 0.3]);
     }
   }
   return bed;
@@ -774,13 +854,24 @@ export function createEquipmentModel(kind: EquipmentKind, scale = 1) {
   const brass = new THREE.MeshStandardMaterial({ color: 0xb58332, roughness: 0.45, metalness: 0.58 });
 
   if (kind === "axe") {
-    cylinder(group, [0.045, 0.055], 1.36, [0, 0, 0], dark);
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.22, 0.11), steel);
-    head.position.y = 0.68;
-    head.rotation.z = -0.08;
-    head.castShadow = true;
-    group.add(head);
-    box(group, [0.18, 0.38, 0.13], [-0.3, 0.65, 0], red, [0, 0, -0.22]);
+    // Fire axe: 900 mm oval haft, bit tapering to an edge, square poll behind
+    // the eye, over-strike collar under the head and a red-banded blade.
+    cylinder(group, [0.026, 0.032], 1.28, [0, 0, 0], dark, undefined, 12);
+    const bit = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.2, 0.02, 0.3, 4, 1),
+      steel,
+    );
+    bit.rotation.set(0, Math.PI / 4, Math.PI / 2);
+    bit.position.set(-0.19, 0.66, 0);
+    bit.scale.set(1, 1, 0.36);
+    bit.castShadow = true;
+    group.add(bit);
+    box(group, [0.13, 0.15, 0.1], [0, 0.66, 0], steel);
+    box(group, [0.12, 0.12, 0.1], [0.11, 0.665, 0], dark, [0, 0, 0.12]);
+    box(group, [0.055, 0.05, 0.115], [0, 0.55, 0], red);
+    box(group, [0.16, 0.09, 0.075], [-0.16, 0.66, 0], red);
+    // Grip wrap at the bottom of the haft.
+    cylinder(group, [0.034, 0.034], 0.26, [0, -0.5, 0], black, undefined, 12);
   } else if (kind === "radio") {
     box(group, [0.54, 0.76, 0.22], [0, 0, 0], olive);
     box(group, [0.38, 0.18, 0.04], [0, 0.15, 0.13], black);
@@ -813,9 +904,26 @@ export function createEquipmentModel(kind: EquipmentKind, scale = 1) {
     handle.rotation.z = Math.PI;
     group.add(handle);
   } else if (kind === "pistol") {
-    box(group, [0.2, 0.34, 0.18], [0, -0.25, 0], black, [0, 0, -0.16]);
-    box(group, [0.24, 0.24, 0.72], [0, 0.06, -0.22], steel);
-    box(group, [0.3, 0.12, 0.5], [0, 0.19, -0.15], black);
+    // Roughly 190 x 135 x 32 mm overall. Previously three boxes; now it has the
+    // parts an eye actually looks for at arm's length — a slide with a
+    // chamfered nose, a barrel that opens at the muzzle, sights, a trigger
+    // inside a guard, and a magazine floorplate.
+    box(group, [0.13, 0.3, 0.19], [0, -0.2, 0.02], black, [0, 0, -0.14]);
+    box(group, [0.14, 0.045, 0.2], [0, -0.35, 0.04], steel, [0, 0, -0.14]);
+    box(group, [0.15, 0.15, 0.62], [0, 0.05, -0.2], steel);
+    box(group, [0.15, 0.08, 0.1], [0, 0.02, -0.53], steel, [0.34, 0, 0]);
+    cylinder(group, [0.036, 0.036], 0.1, [0, 0.03, -0.52], black, [Math.PI / 2, 0, 0], 12);
+    box(group, [0.14, 0.09, 0.5], [0, 0.15, -0.16], black);
+    box(group, [0.028, 0.035, 0.03], [0, 0.21, -0.44], black);
+    box(group, [0.09, 0.035, 0.03], [0, 0.21, 0.06], black);
+    const guard = new THREE.Mesh(
+      new THREE.TorusGeometry(0.075, 0.014, 6, 14, Math.PI * 1.15),
+      black,
+    );
+    guard.rotation.set(0, Math.PI / 2, -0.4);
+    guard.position.set(0, -0.06, -0.06);
+    group.add(guard);
+    box(group, [0.03, 0.09, 0.035], [0, -0.05, -0.07], steel, [0, 0, 0.2]);
   } else {
     box(group, [0.72, 0.94, 0.32], [0, 0, 0], red);
     box(group, [0.48, 0.52, 0.035], [0, 0, 0.18], red);
@@ -914,6 +1022,7 @@ function floorMaterialsFrom(materials: MaterialSet): FloorMaterials {
     floor: materials.tile,
     wall: materials.wall,
     ceiling: materials.concreteDark,
+    ceilingTile: materials.ceilingTile,
     trim: materials.paintedMetal,
     door: materials.darkGreen,
     doorGlass: materials.glass,
@@ -949,13 +1058,8 @@ function lightRoom(
     positions.push([0, 0]);
   }
   for (const [offsetX, offsetZ] of positions) {
-    addFluorescent(
-      root,
-      centre.x + offsetX,
-      centre.z + offsetZ,
-      intensity,
-      ceiling - 0.12,
-    );
+    // Flush with the grid: the housing sits just above the tile line.
+    addFluorescent(root, centre.x + offsetX, centre.z + offsetZ, intensity, ceiling);
   }
 }
 

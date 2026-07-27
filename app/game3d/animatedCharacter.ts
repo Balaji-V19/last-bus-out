@@ -524,16 +524,24 @@ function createAxe(materials: CharacterMaterials) {
   // forward of that socket prevents the axe head from pivoting through the
   // wrist during native attack clips.
   tapered(axe, 0.021, 0.029, 0.62, materials.webbing, [0, 0.17, 0], [0, 0, 0.045]);
+  // Eye and poll.
   rounded(axe, [0.12, 0.08, 0.055], materials.metal, [0.025, 0.48, 0], 0.015, [0, 0, -0.035]);
+  // The blade was a three-sided cone, which is a flat triangular wedge — the
+  // most visible primitive in the game, held at eye height in first person. A
+  // four-sided cone squashed on one axis gives a real bit: two ground faces
+  // meeting at an edge, with cheeks that catch the light separately.
   const blade = addMesh(
     axe,
-    new THREE.ConeGeometry(0.17, 0.27, 3),
+    new THREE.CylinderGeometry(0.175, 0.018, 0.26, 4, 1),
     materials.metal,
-    [-0.19, 0.475, 0],
-    [0, 0, -Math.PI / 2],
-    [0.42, 1, 0.24],
+    [-0.175, 0.478, 0],
+    [0, Math.PI / 4, -Math.PI / 2],
+    [1, 1, 0.3],
   );
-  blade.rotation.y = Math.PI / 2;
+  blade.castShadow = true;
+  // Beard sweeping down behind the edge, and the over-strike collar.
+  rounded(axe, [0.07, 0.11, 0.05], materials.metal, [-0.1, 0.435, 0], 0.012, [0, 0, 0.22]);
+  rounded(axe, [0.05, 0.045, 0.07], materials.rubber, [0.01, 0.41, 0], 0.012);
   axe.position.set(0, 0.06, 0);
   axe.rotation.set(Math.PI / 2, 0.06, -0.04);
   axe.visible = false;
@@ -543,15 +551,28 @@ function createAxe(materials: CharacterMaterials) {
 function createPistol(materials: CharacterMaterials) {
   const pistol = new THREE.Group();
   pistol.name = "Pistol";
-  rounded(pistol, [0.14, 0.18, 0.48], materials.metal, [0, -0.02, -0.2], 0.025);
-  rounded(pistol, [0.13, 0.32, 0.16], materials.rubber, [0, -0.2, -0.02], 0.035, [-0.18, 0, 0]);
+  // Slide, frame, grip, barrel, sights and magazine. Previously two rounded
+  // boxes and a torus with no slide, barrel or sights at all.
+  rounded(pistol, [0.13, 0.115, 0.46], materials.metal, [0, 0.02, -0.2], 0.018);
+  rounded(pistol, [0.115, 0.075, 0.4], materials.metal, [0, -0.055, -0.19], 0.014);
+  rounded(pistol, [0.125, 0.3, 0.15], materials.rubber, [0, -0.21, -0.02], 0.03, [-0.18, 0, 0]);
+  // Barrel protruding at the muzzle, with a bore.
+  tapered(pistol, 0.028, 0.028, 0.06, materials.metal, [0, 0.02, -0.45], [Math.PI / 2, 0, 0]);
+  tapered(pistol, 0.014, 0.014, 0.07, materials.rubber, [0, 0.02, -0.46], [Math.PI / 2, 0, 0]);
+  // Front and rear sights.
+  rounded(pistol, [0.016, 0.026, 0.02], materials.metal, [0, 0.09, -0.4], 0.004);
+  rounded(pistol, [0.055, 0.024, 0.02], materials.metal, [0, 0.09, 0.0], 0.004);
+  // Trigger and guard.
+  rounded(pistol, [0.02, 0.055, 0.022], materials.metal, [0, -0.1, -0.1], 0.006, [0.2, 0, 0]);
   addMesh(
     pistol,
-    new THREE.TorusGeometry(0.065, 0.015, 7, 14, Math.PI * 1.4),
+    new THREE.TorusGeometry(0.058, 0.012, 6, 14, Math.PI * 1.25),
     materials.metal,
-    [0, -0.14, -0.14],
-    [0, Math.PI / 2, 0],
+    [0, -0.115, -0.115],
+    [0, Math.PI / 2, -0.35],
   );
+  // Magazine floorplate.
+  rounded(pistol, [0.128, 0.022, 0.14], materials.metal, [0, -0.365, 0.045], 0.006, [-0.18, 0, 0]);
   pistol.position.set(0, -0.08, -0.12);
   pistol.visible = false;
   return pistol;

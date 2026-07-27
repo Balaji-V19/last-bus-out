@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 // Room-graph floor plans.
 //
@@ -50,6 +51,8 @@ export type Room = {
   light: "rows" | "single" | "sconce" | "emergency" | "dead";
   /** Door plaque or wall sign text. */
   plaque?: string;
+  /** Seeds the deterministic scatter of missing ceiling tiles. */
+  ambientSeed?: number;
 };
 
 export type Opening = {
@@ -378,11 +381,23 @@ export type CompiledFloor = {
 export type FloorMaterials = {
   floor: THREE.Material;
   wall: THREE.Material;
+  /** The dark plenum slab above the suspended grid. */
   ceiling: THREE.Material;
+  /** Mineral-fibre tile sitting in the grid. */
+  ceilingTile: THREE.Material;
   trim: THREE.Material;
   door: THREE.Material;
   doorGlass: THREE.Material;
 };
+
+/** Deterministic per-room jitter, so missing tiles land in the same places. */
+function seededNoise(seed: number) {
+  let value = (seed >>> 0) || 1;
+  return () => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 4294967296;
+  };
+}
 
 function addBox(
   parent: THREE.Object3D,
@@ -470,15 +485,80 @@ export function compileFloor(
     // Slab and ceiling span the full structural rectangle so they meet under
     // the walls rather than leaving a seam at every partition.
     addBox(root, [sx, 0.12, sz], [cx, -0.06, cz], materials.floor);
+
     // Suspended ceiling at the room's own height. Varying this per room is the
     // main emotional control in first person: a 2.3 m plant room feels nothing
     // like a 3.4 m vestibule.
-    addBox(
-      root,
-      [sx, 0.1, sz],
-      [cx, room.ceiling + 0.05, cz],
-      materials.ceiling,
-    );
+    //
+    // The plenum above is a dark slab; below it sits a 600 mm T-bar grid with
+    // tiles dropped out here and there. A flat panel overhead reads as a box,
+    // whereas a grid with gaps and exposed services overhead reads as a
+    // building — and the gaps are where a torch beam finds nothing.
+    addBox(root, [sx, 0.1, sz], [cx, room.ceiling + 0.34, cz], materials.ceiling);
+
+    // A 600 mm grid over a large room is hundreds of tiles. Emitted as separate
+    // meshes that is hundreds of draw calls per room, which this build's
+    // low-power renderer budget cannot absorb, so the tiles and the runners are
+    // each merged into a single geometry per room.
+    const tile = 0.6;
+    const columns = Math.max(1, Math.round(sx / tile));
+    const rows = Math.max(1, Math.round(sz / tile));
+    const tileX = sx / columns;
+    const tileZ = sz / rows;
+    const drop = seededNoise(room.ambientSeed ?? 1);
+    const tileParts: THREE.BufferGeometry[] = [];
+    const runnerParts: THREE.BufferGeometry[] = [];
+
+    for (let row = 0; row < rows; row += 1) {
+      for (let column = 0; column < columns; column += 1) {
+        // A few tiles per room are missing, more in the rougher spaces. The
+        // gaps are where a torch beam finds nothing overhead.
+        const missingChance = room.light === "dead" ? 0.14 : 0.05;
+        if (drop() < missingChance) continue;
+        const geometry = new THREE.BoxGeometry(
+          tileX - 0.024,
+          0.016,
+          tileZ - 0.024,
+        );
+        geometry.translate(
+          cx - sx / 2 + tileX * (column + 0.5),
+          room.ceiling,
+          cz - sz / 2 + tileZ * (row + 0.5),
+        );
+        tileParts.push(geometry);
+      }
+    }
+    for (let column = 0; column <= columns; column += 1) {
+      const geometry = new THREE.BoxGeometry(0.024, 0.03, sz);
+      geometry.translate(
+        cx - sx / 2 + tileX * column,
+        room.ceiling + 0.012,
+        cz,
+      );
+      runnerParts.push(geometry);
+    }
+    for (let row = 0; row <= rows; row += 1) {
+      const geometry = new THREE.BoxGeometry(sx, 0.03, 0.024);
+      geometry.translate(
+        cx,
+        room.ceiling + 0.012,
+        cz - sz / 2 + tileZ * row,
+      );
+      runnerParts.push(geometry);
+    }
+
+    for (const [parts, material] of [
+      [tileParts, materials.ceilingTile],
+      [runnerParts, materials.trim],
+    ] as const) {
+      if (parts.length === 0) continue;
+      const merged = mergeGeometries(parts, false);
+      for (const part of parts) part.dispose();
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, material);
+      mesh.receiveShadow = true;
+      root.add(mesh);
+    }
 
     paintRect(
       interior.x0,
