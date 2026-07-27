@@ -23,7 +23,9 @@ import type {
 } from "./game3d/audio";
 import {
   buildWorld,
+  computeFlowField,
   disposeWorld,
+  flowDirection,
   gridAllows,
   type BuiltWorld,
   type EquipmentKind,
@@ -639,19 +641,29 @@ export const GameViewport3D = forwardRef<
       }
 
       // Player: a facing wedge, so the map is readable without a compass.
+      //
+      // A body at rotation.y = h faces world (-sin h, 0, -cos h). The map draws
+      // +x rightward and +z downward, so that forward vector lands on the 2D
+      // vector (-sin h, -cos h) with no extra half-turn. The previous version
+      // added one, which is why the marker pointed backwards.
       const [mx, my] = toMap(playerRoot.position.x, playerRoot.position.z);
       const heading = playerRoot.rotation.y;
+      const forwardX = -Math.sin(heading);
+      const forwardY = -Math.cos(heading);
       context.fillStyle = "rgba(214, 232, 214, 0.95)";
       context.beginPath();
-      for (const [length, spread] of [
-        [6.4, 0],
-        [4.2, 2.5],
-        [4.2, -2.5],
-      ] as const) {
-        const angle = heading + Math.PI + spread;
-        const pointX = mx + Math.sin(angle) * -length;
-        const pointY = my + Math.cos(angle) * -length;
-        if (spread === 0) context.moveTo(pointX, pointY);
+      for (const [index, [length, spread]] of (
+        [
+          [6.6, 0],
+          [4.4, 2.55],
+          [4.4, -2.55],
+        ] as const
+      ).entries()) {
+        const cos = Math.cos(spread);
+        const sin = Math.sin(spread);
+        const pointX = mx + (forwardX * cos - forwardY * sin) * length;
+        const pointY = my + (forwardX * sin + forwardY * cos) * length;
+        if (index === 0) context.moveTo(pointX, pointY);
         else context.lineTo(pointX, pointY);
       }
       context.closePath();
@@ -693,6 +705,14 @@ export const GameViewport3D = forwardRef<
     let progressReportClock = 0;
     let pendingEncounter: (() => void) | null = null;
     let pendingEncounterClock = 0;
+    // Routing field toward the player, rebuilt when they have moved far enough
+    // for the old one to be misleading. One BFS over ~26k cells is cheap at
+    // this cadence and replaces per-enemy pathfinding entirely.
+    let flowField: Int32Array | null = null;
+    let flowClock = 0;
+    let encounterStallClock = 0;
+    const flowOrigin = new THREE.Vector3();
+    const enemyFlowDirection = new THREE.Vector3();
     let nextEnemyId = 1;
     let elapsedTime = 0;
     let fear = 8;
@@ -1336,11 +1356,14 @@ export const GameViewport3D = forwardRef<
           spawnEnemyInRoom("walker", "nurse", 1.4, -1.8);
         });
       } else if (current.chapter === "hospital" && current.step === 5) {
+        // Nothing spawns in the stairwell: it is the room the player has to
+        // reach to finish the floor, and an enemy parked in it behind a closed
+        // door is exactly what used to wedge and stall the encounter.
         arm(() => {
           spawnEnemyInRoom("walker", "southHall", -3.2, 1.4);
           spawnEnemyInRoom("runner", "radiology", 2.6, -1.6);
           spawnEnemyInRoom("walker", "subWait", 2.2, 2.4);
-          spawnEnemyInRoom("heavy", "stairwell", 0, 2.6);
+          spawnEnemyInRoom("heavy", "triage", 0, -4.2);
         });
       } else if (current.chapter === "street" && current.step === 1) {
         arm(() => {
@@ -1721,6 +1744,26 @@ export const GameViewport3D = forwardRef<
               .copy(enemyOffset)
               .addScaledVector(enemySideways, weaveStrength)
               .normalize();
+
+            // Prefer the routed direction over the straight line whenever a
+            // flow field exists and the enemy is far enough away that going
+            // through the doorway matters more than closing the last metre.
+            if (world.grid && flowField && distance > 2.4) {
+              const routed = flowDirection(
+                world.grid,
+                flowField,
+                enemy.root.position.x,
+                enemy.root.position.z,
+              );
+              if (routed && (routed.x !== 0 || routed.z !== 0)) {
+                enemyFlowDirection.set(routed.x, 0, routed.z);
+                // Blend so movement still reads as a shambling advance rather
+                // than a grid-perfect march.
+                enemyChaseDirection
+                  .lerp(enemyFlowDirection, 0.78)
+                  .normalize();
+              }
+            }
             const gaitPulse =
               0.82 +
               Math.sin(
@@ -2236,8 +2279,8 @@ export const GameViewport3D = forwardRef<
             {
               intensity: THREE.MathUtils.clamp(
                 1.05 - nearestDistance / 30,
-                0.16,
-                0.9,
+                0.38,
+                1,
               ),
               pan: panFor(nearest.root.position, 0.9),
             },
@@ -2250,6 +2293,68 @@ export const GameViewport3D = forwardRef<
         if (encounterWasActive && livingEnemies.length === 0) {
           encounterWasActive = false;
           current.onEncounterCleared();
+        }
+
+        // Safety net. Progress on several steps is gated on clearing an
+        // encounter, so an enemy that can never be reached — wedged in
+        // geometry, or spawned in a pocket the player has no route to — used to
+        // strand the campaign with no way forward. If every survivor of an
+        // encounter has been unroutable and far away for a sustained period,
+        // treat the encounter as cleared rather than let it dead-end the run.
+        if (encounterWasActive && livingEnemies.length > 0) {
+          let anyReachable = false;
+          for (const enemy of livingEnemies) {
+            const range = enemy.root.position.distanceTo(playerRoot.position);
+            if (range < 24) {
+              anyReachable = true;
+              break;
+            }
+            if (!world.grid || !flowField) {
+              anyReachable = true;
+              break;
+            }
+            if (
+              flowDirection(
+                world.grid,
+                flowField,
+                enemy.root.position.x,
+                enemy.root.position.z,
+              )
+            ) {
+              anyReachable = true;
+              break;
+            }
+          }
+          if (anyReachable) encounterStallClock = 0;
+          else encounterStallClock += delta;
+          if (encounterStallClock > 12) {
+            encounterStallClock = 0;
+            for (const enemy of [...livingEnemies]) removeEnemy(enemy);
+            encounterWasActive = false;
+            current.onEncounterCleared();
+          }
+        } else {
+          encounterStallClock = 0;
+        }
+
+        // Rebuild the routing field when the player has moved far enough that
+        // the old one would send enemies to where they used to be.
+        if (world.grid) {
+          flowClock -= delta;
+          if (
+            !flowField ||
+            flowClock <= 0 ||
+            flowOrigin.distanceToSquared(playerRoot.position) > 1.44
+          ) {
+            flowClock = 0.45;
+            flowOrigin.copy(playerRoot.position);
+            flowField = computeFlowField(
+              world.grid,
+              playerRoot.position.x,
+              playerRoot.position.z,
+              flowField ?? undefined,
+            );
+          }
         }
 
         // Release a warned encounter once its telegraph has played out.

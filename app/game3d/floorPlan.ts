@@ -149,6 +149,127 @@ export function gridSees(
   return true;
 }
 
+/**
+ * Breadth-first distance field over walkable cells, measured from a target.
+ *
+ * Enemies used to walk straight at the player, which is fine in a tube and
+ * useless in rooms: they wedged in doorways and never arrived, which could
+ * leave an encounter permanently uncleared. Reading a flow field instead means
+ * they route through openings without needing a navmesh.
+ *
+ * Unreachable cells stay at -1.
+ */
+export function computeFlowField(
+  grid: OccupancyGrid,
+  targetX: number,
+  targetZ: number,
+  scratch?: Int32Array,
+) {
+  const size = grid.width * grid.height;
+  const distance = scratch && scratch.length === size ? scratch : new Int32Array(size);
+  distance.fill(-1);
+
+  const column = Math.floor((targetX - grid.originX) / grid.cell);
+  const row = Math.floor((targetZ - grid.originZ) / grid.cell);
+  if (column < 0 || row < 0 || column >= grid.width || row >= grid.height) {
+    return distance;
+  }
+  const start = row * grid.width + column;
+  if ((grid.data[start] & WALKABLE) === 0) return distance;
+
+  // Ring buffer sized to the grid; BFS visits each cell at most once.
+  const queue = new Int32Array(size);
+  let head = 0;
+  let tail = 0;
+  distance[start] = 0;
+  queue[tail++] = start;
+
+  while (head < tail) {
+    const index = queue[head++];
+    const cx = index % grid.width;
+    const cz = (index - cx) / grid.width;
+    const next = distance[index] + 1;
+    for (let step = 0; step < 8; step += 1) {
+      const dx = FLOW_NEIGHBOURS[step * 2];
+      const dz = FLOW_NEIGHBOURS[step * 2 + 1];
+      const nx = cx + dx;
+      const nz = cz + dz;
+      if (nx < 0 || nz < 0 || nx >= grid.width || nz >= grid.height) continue;
+      const at = nz * grid.width + nx;
+      if (distance[at] >= 0) continue;
+      if ((grid.data[at] & WALKABLE) === 0) continue;
+      // Never cut a diagonal through a wall corner.
+      if (dx !== 0 && dz !== 0) {
+        const sideA = cz * grid.width + (cx + dx);
+        const sideB = (cz + dz) * grid.width + cx;
+        if ((grid.data[sideA] & WALKABLE) === 0) continue;
+        if ((grid.data[sideB] & WALKABLE) === 0) continue;
+      }
+      distance[at] = next;
+      queue[tail++] = at;
+    }
+  }
+  return distance;
+}
+
+const FLOW_NEIGHBOURS = new Int8Array([
+  1, 0, -1, 0, 0, 1, 0, -1, 1, 1, 1, -1, -1, 1, -1, -1,
+]);
+
+/**
+ * Unit direction from (x, z) toward the flow field's target, or null when the
+ * position is off-grid or in a pocket with no route.
+ */
+export function flowDirection(
+  grid: OccupancyGrid,
+  distance: Int32Array,
+  x: number,
+  z: number,
+): { x: number; z: number } | null {
+  const column = Math.floor((x - grid.originX) / grid.cell);
+  const row = Math.floor((z - grid.originZ) / grid.cell);
+  if (column < 0 || row < 0 || column >= grid.width || row >= grid.height) {
+    return null;
+  }
+  const here = distance[row * grid.width + column];
+  if (here < 0) return null;
+  if (here === 0) return { x: 0, z: 0 };
+
+  // Averaging every descending neighbour rather than taking the single best
+  // one keeps a mover centred in an opening. Picking one neighbour lets it hug
+  // the wall beside a door and then fail to fit through the gap, which is what
+  // stranded enemies against door frames.
+  let sumX = 0;
+  let sumZ = 0;
+  let fallbackX = 0;
+  let fallbackZ = 0;
+  let bestValue = here;
+  for (let step = 0; step < 8; step += 1) {
+    const dx = FLOW_NEIGHBOURS[step * 2];
+    const dz = FLOW_NEIGHBOURS[step * 2 + 1];
+    const nx = column + dx;
+    const nz = row + dz;
+    if (nx < 0 || nz < 0 || nx >= grid.width || nz >= grid.height) continue;
+    const value = distance[nz * grid.width + nx];
+    if (value < 0 || value >= here) continue;
+    const weight = here - value;
+    const length = Math.hypot(dx, dz) || 1;
+    sumX += (dx / length) * weight;
+    sumZ += (dz / length) * weight;
+    if (value < bestValue) {
+      bestValue = value;
+      fallbackX = dx / length;
+      fallbackZ = dz / length;
+    }
+  }
+  const magnitude = Math.hypot(sumX, sumZ);
+  if (magnitude > 0.0001) {
+    return { x: sumX / magnitude, z: sumZ / magnitude };
+  }
+  if (fallbackX === 0 && fallbackZ === 0) return null;
+  return { x: fallbackX, z: fallbackZ };
+}
+
 type Interval = { min: number; max: number };
 
 type WallRun = {
@@ -436,28 +557,6 @@ export function compileFloor(
       opening,
     });
 
-    // The doorway is walkable and, when open, see-through.
-    const half = opening.width / 2;
-    const seeThrough = opening.state === "open" || opening.kind === "arch";
-    if (placement.axis === "alongX") {
-      paintRect(
-        placement.centre - half,
-        placement.centre + half,
-        placement.fixed - WALL_THICKNESS,
-        placement.fixed + WALL_THICKNESS,
-        WALKABLE | (seeThrough ? 0 : OPAQUE),
-        seeThrough ? OPAQUE : 0,
-      );
-    } else {
-      paintRect(
-        placement.fixed - WALL_THICKNESS,
-        placement.fixed + WALL_THICKNESS,
-        placement.centre - half,
-        placement.centre + half,
-        WALKABLE | (seeThrough ? 0 : OPAQUE),
-        seeThrough ? OPAQUE : 0,
-      );
-    }
   }
 
   // ---- emit wall geometry -------------------------------------------------
@@ -509,6 +608,40 @@ export function compileFloor(
           WALKABLE,
         );
       }
+    }
+  }
+
+  // ---- doorway walkability, painted last ---------------------------------
+  // Walls must rasterise outward or a 0.15 m partition could miss the 0.25 m
+  // grid entirely and stop blocking. That outward rounding also bleeds a cell
+  // into each side of every opening, which turned a 1.2 m door into roughly
+  // 0.7 m of clearance — narrower than an enemy, so they wedged in door frames
+  // and never arrived. Repainting the openings after the walls gives the
+  // doorway back its full width.
+  for (const doorway of doorways) {
+    const half = doorway.width / 2 - 0.02;
+    const seeThrough =
+      doorway.opening.state === "open" || doorway.opening.kind === "arch";
+    const set = WALKABLE | (seeThrough ? 0 : OPAQUE);
+    const clear = seeThrough ? OPAQUE : 0;
+    if (doorway.axis === "alongX") {
+      paintRect(
+        doorway.centre - half,
+        doorway.centre + half,
+        doorway.fixed - WALL_THICKNESS,
+        doorway.fixed + WALL_THICKNESS,
+        set,
+        clear,
+      );
+    } else {
+      paintRect(
+        doorway.fixed - WALL_THICKNESS,
+        doorway.fixed + WALL_THICKNESS,
+        doorway.centre - half,
+        doorway.centre + half,
+        set,
+        clear,
+      );
     }
   }
 

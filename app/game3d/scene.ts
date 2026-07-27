@@ -4,7 +4,12 @@ import { compileFloor, type FloorMaterials, type OccupancyGrid } from "./floorPl
 import { groundEmergencyPlan } from "./floors";
 
 export type { OccupancyGrid } from "./floorPlan";
-export { gridAllows, gridSees } from "./floorPlan";
+export {
+  gridAllows,
+  gridSees,
+  computeFlowField,
+  flowDirection,
+} from "./floorPlan";
 
 export type GameChapter =
   | "hospital"
@@ -955,6 +960,58 @@ function lightRoom(
 }
 
 /**
+ * The floor exit. This used to be an empty Group marked only by the gold ring
+ * that has since been removed, which left nothing at all to see or walk toward.
+ * It is now a real fire-escape door with a push bar and a lit running-man sign.
+ */
+function stairwellExit(materials: MaterialSet) {
+  const exit = new THREE.Group();
+  exit.userData.staticInteraction = true;
+
+  // Frame and threshold.
+  box(exit, [2.3, 0.16, 0.22], [0, 2.24, 0], materials.paintedMetal);
+  for (const side of [-1, 1]) {
+    box(exit, [0.14, 2.24, 0.22], [side * 1.08, 1.12, 0], materials.paintedMetal);
+  }
+  // Two leaves, one ajar so the way on is legible from across the room.
+  for (const [side, swing] of [
+    [-1, 0.0],
+    [1, 0.34],
+  ] as const) {
+    const leaf = new THREE.Group();
+    leaf.position.set(side * 1.0, 0, 0);
+    leaf.rotation.y = side * swing;
+    box(leaf, [0.98, 2.14, 0.05], [-side * 0.49, 1.07, 0], materials.darkGreen);
+    box(leaf, [0.34, 0.62, 0.02], [-side * 0.49, 1.62, 0.035], materials.glass);
+    // Push bar at 1.05 m.
+    cylinder(
+      leaf,
+      [0.028, 0.028],
+      0.82,
+      [-side * 0.49, 1.05, 0.06],
+      materials.metal,
+      [0, 0, Math.PI / 2],
+      12,
+    );
+    box(leaf, [0.9, 0.18, 0.02], [-side * 0.49, 0.16, 0.036], materials.metal);
+    exit.add(leaf);
+  }
+  // Running-man sign. Emissive because a real exit sign is on its own battery,
+  // which also makes it the one thing still lit during a blackout.
+  const sign = new THREE.Mesh(
+    new THREE.BoxGeometry(0.62, 0.24, 0.04),
+    new THREE.MeshStandardMaterial({
+      color: 0x1f6b3a,
+      emissive: 0x27f07a,
+      emissiveIntensity: 1.35,
+    }),
+  );
+  sign.position.set(0, 2.52, 0.06);
+  exit.add(sign);
+  return exit;
+}
+
+/**
  * Ground Floor Emergency, built from the room graph in floors.ts.
  *
  * Replaces the previous 17 x 128 m straight corridor whose "side rooms" were a
@@ -1079,7 +1136,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     interactionObject(root, "radio", "Check emergency radio", at("nurse", -1.4, 1.4), createEquipmentModel("radio", 1), "desk"),
     interactionObject(root, "axe", "Take fire axe", at("resus", 3.2, 2.8), createEquipmentModel("axe", 1)),
     interactionObject(root, "breaker", "Reset stairwell power", at("radiology", 4.2, 2.6), breaker),
-    interactionObject(root, "exit", "Enter Stairwell A", at("stairwell", 0, -2.6), new THREE.Group()),
+    interactionObject(root, "exit", "Enter Stairwell A", at("stairwell", 0, -2.6), stairwellExit(materials)),
   );
 
   return {

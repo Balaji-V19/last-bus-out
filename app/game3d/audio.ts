@@ -220,7 +220,12 @@ export class SurvivalAudio {
   startMusic(chapter: MusicChapter, intensity = 0.55) {
     if (!this.enabled || typeof window === "undefined") return;
     const normalizedIntensity = clamp(intensity, 0, 1);
-    const targetVolume = 0.22 + normalizedIntensity * 0.18;
+    // The score sat at 0.22-0.40 while synthesized cues peak around 0.08, and
+    // because it plays through a bare HTMLAudioElement it bypasses the master
+    // gain entirely — so zombies were being mixed under the music to the point
+    // of inaudibility. Held well below the effects bus until the music is
+    // routed through the AudioContext and can be ducked properly.
+    const targetVolume = 0.1 + normalizedIntensity * 0.08;
     const playbackRate = 0.985 + normalizedIntensity * 0.025;
     if (this.music) {
       this.music.chapter = chapter;
@@ -331,37 +336,39 @@ export class SurvivalAudio {
       return;
     }
 
+    // The zombie voice family carries most of the game's threat information, so
+    // it sits well forward in the mix rather than under the score.
     if (event === "zombie-alert") {
-      this.tone(104, 0.68, 0.052 * intensity, "sawtooth", pan, 48);
-      this.tone(71, 0.74, 0.036 * intensity, "triangle", pan, 43, 0.035);
-      this.noiseBurst(0.5, 0.022 * intensity, "lowpass", 560, pan, 0.04, 170);
+      this.tone(104, 0.68, 0.132 * intensity, "sawtooth", pan, 48);
+      this.tone(71, 0.74, 0.092 * intensity, "triangle", pan, 43, 0.035);
+      this.noiseBurst(0.5, 0.056 * intensity, "lowpass", 560, pan, 0.04, 170);
       return;
     }
 
     if (event === "zombie-growl") {
-      this.tone(74, 0.48, 0.064 * intensity, "sawtooth", pan, 39);
-      this.tone(51, 0.62, 0.046 * intensity, "triangle", pan, 31, 0.045);
-      this.noiseBurst(0.36, 0.055 * intensity, "bandpass", 430, pan, 0.025, 185);
-      this.noiseBurst(0.12, 0.021 * intensity, "highpass", 2600, pan, 0.16);
+      this.tone(74, 0.48, 0.162 * intensity, "sawtooth", pan, 39);
+      this.tone(51, 0.62, 0.116 * intensity, "triangle", pan, 31, 0.045);
+      this.noiseBurst(0.36, 0.138 * intensity, "bandpass", 430, pan, 0.025, 185);
+      this.noiseBurst(0.12, 0.053 * intensity, "highpass", 2600, pan, 0.16);
       return;
     }
 
     if (event === "zombie-attack") {
-      this.tone(128, 0.28, 0.06 * intensity, "sawtooth", pan, 63);
-      this.noiseBurst(0.2, 0.07 * intensity, "bandpass", 840, pan, 0.03, 210);
+      this.tone(128, 0.28, 0.15 * intensity, "sawtooth", pan, 63);
+      this.noiseBurst(0.2, 0.175 * intensity, "bandpass", 840, pan, 0.03, 210);
       return;
     }
 
     if (event === "zombie-hit") {
-      this.tone(82, 0.15, 0.065 * intensity, "sine", pan, 39);
-      this.noiseBurst(0.18, 0.085 * intensity, "lowpass", 680, pan, 0, 160);
+      this.tone(82, 0.15, 0.13 * intensity, "sine", pan, 39);
+      this.noiseBurst(0.18, 0.17 * intensity, "lowpass", 680, pan, 0, 160);
       this.noiseBurst(0.08, 0.035 * intensity, "highpass", 2100, pan, 0.018);
       return;
     }
 
     if (event === "zombie-death") {
-      this.tone(92, 0.82, 0.065 * intensity, "sawtooth", pan, 31);
-      this.tone(58, 0.9, 0.035 * intensity, "triangle", pan, 25, 0.04);
+      this.tone(92, 0.82, 0.14 * intensity, "sawtooth", pan, 31);
+      this.tone(58, 0.9, 0.076 * intensity, "triangle", pan, 25, 0.04);
       this.noiseBurst(0.25, 0.07 * intensity, "lowpass", 360, pan, 0.58, 90);
       return;
     }
@@ -370,34 +377,34 @@ export class SurvivalAudio {
     // pitch so it reads as "something is about to happen" rather than as
     // another growl in the mix.
     if (event === "zombie-lunge") {
-      this.tone(96, 0.3, 0.075 * intensity, "sawtooth", pan, 188);
-      this.tone(143, 0.26, 0.042 * intensity, "square", pan, 260, 0.02);
-      this.noiseBurst(0.26, 0.062 * intensity, "bandpass", 520, pan, 0, 1450);
+      this.tone(96, 0.3, 0.185 * intensity, "sawtooth", pan, 188);
+      this.tone(143, 0.26, 0.105 * intensity, "square", pan, 260, 0.02);
+      this.noiseBurst(0.26, 0.155 * intensity, "bandpass", 520, pan, 0, 1450);
       return;
     }
 
     // Wet, close-range breathing. Only ever triggered by proximity, so hearing
     // it at all means something is near enough to matter.
     if (event === "zombie-breath") {
-      this.noiseBurst(0.42, 0.05 * intensity, "bandpass", 620, pan, 0, 300);
-      this.noiseBurst(0.3, 0.032 * intensity, "bandpass", 240, pan, 0.4, 420);
-      this.tone(58, 0.34, 0.022 * intensity, "triangle", pan, 44, 0.05);
+      this.noiseBurst(0.42, 0.115 * intensity, "bandpass", 620, pan, 0, 300);
+      this.noiseBurst(0.3, 0.074 * intensity, "bandpass", 240, pan, 0.4, 420);
+      this.tone(58, 0.34, 0.05 * intensity, "triangle", pan, 44, 0.05);
       return;
     }
 
     // Runner acquiring the player. Deliberately the loudest thing in the game.
     if (event === "zombie-scream") {
-      this.tone(320, 0.62, 0.085 * intensity, "sawtooth", pan, 128);
-      this.tone(196, 0.7, 0.062 * intensity, "square", pan, 92, 0.03);
-      this.tone(742, 0.4, 0.03 * intensity, "sawtooth", pan, 410, 0.015);
-      this.noiseBurst(0.55, 0.055 * intensity, "bandpass", 1350, pan, 0, 480);
+      this.tone(320, 0.62, 0.2 * intensity, "sawtooth", pan, 128);
+      this.tone(196, 0.7, 0.145 * intensity, "square", pan, 92, 0.03);
+      this.tone(742, 0.4, 0.07 * intensity, "sawtooth", pan, 410, 0.015);
+      this.noiseBurst(0.55, 0.128 * intensity, "bandpass", 1350, pan, 0, 480);
       return;
     }
 
     // Two-stage wave telegraph: a distant structural groan when the countdown
     // opens, then a harder alarm doublet just before the doors give.
     if (event === "wave-warning") {
-      this.tone(44, 1.5, 0.058 * intensity, "sine", pan, 33);
+      this.tone(44, 1.5, 0.125 * intensity, "sine", pan, 33);
       this.tone(67, 1.25, 0.03 * intensity, "triangle", pan, 51, 0.08);
       this.noiseBurst(1.35, 0.03 * intensity, "lowpass", 210, pan, 0.05, 95);
       this.noiseBurst(0.5, 0.022 * intensity, "bandpass", 1750, pan, 0.5, 900);
@@ -407,8 +414,8 @@ export class SurvivalAudio {
     if (event === "wave-imminent") {
       for (let index = 0; index < 2; index += 1) {
         const delay = index * 0.34;
-        this.tone(784, 0.2, 0.07 * intensity, "square", pan, undefined, delay);
-        this.tone(523, 0.24, 0.05 * intensity, "sawtooth", pan, undefined, delay + 0.02);
+        this.tone(784, 0.2, 0.15 * intensity, "square", pan, undefined, delay);
+        this.tone(523, 0.24, 0.11 * intensity, "sawtooth", pan, undefined, delay + 0.02);
       }
       this.noiseBurst(0.32, 0.04 * intensity, "highpass", 2400, pan, 0.06);
       return;
