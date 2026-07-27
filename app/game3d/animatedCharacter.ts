@@ -2586,6 +2586,10 @@ function applyAssetSecondaryPose(
     character.style === "runner" ||
     character.style === "heavy";
   if (infected) {
+    // Nothing alive-looking on a body that is going down or already down. The
+    // head lag and posture offsets below are what kept a corpse's head turning
+    // after it had stopped moving.
+    if (state === "death") return;
     const style = character.style as "walker" | "runner" | "heavy";
 
     // Reapplied each frame because the mixer rewrites every bone from the clip

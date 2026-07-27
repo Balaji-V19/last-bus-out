@@ -141,6 +141,14 @@ type EnemyActor = {
   stuckClock: number;
   /** How many gashes this one is already carrying. */
   wounds: number;
+  /** Down and still. The body stays where it fell. */
+  dead: boolean;
+  /** When it came to rest, so it cannot rise the instant it lands. */
+  restedAt: number;
+  /** Whether this one is capable of getting back up. Never revealed. */
+  canRise: boolean;
+  /** Counts up while getting up, so the rise can be animated. */
+  rising: number;
   /** Per-kill death variation, so no two go down the same way. */
   deathSpin: number;
   deathTopple: number;
@@ -534,6 +542,11 @@ export const GameViewport3D = forwardRef<
     const cameraLookAhead = new THREE.Vector3();
     const desiredCamera = new THREE.Vector3();
     const cameraShakeOffset = new THREE.Vector3();
+    const deathAxis = new THREE.Vector3();
+    /** Bodies left on the floor, oldest first. */
+    const corpses: EnemyActor[] = [];
+    /** Rate limiter for the reanimation roll, so it is not tested per frame. */
+    let corpseCheckClock = 0;
     const beamToObject = new THREE.Vector3();
     const beamForward = new THREE.Vector3();
     const lastPlayerPosition = playerRoot.position.clone();
@@ -1016,6 +1029,10 @@ export const GameViewport3D = forwardRef<
         dying: false,
         stuckClock: 0,
         wounds: 0,
+        dead: false,
+        restedAt: 0,
+        canRise: false,
+        rising: 0,
         deathSpin: 0,
         deathTopple: 0,
         deathLean: 1,
@@ -2022,6 +2039,8 @@ export const GameViewport3D = forwardRef<
         ) {
           const enemy = enemies[enemyIndex];
           if (enemy.dying) {
+            // Already at rest: nothing to animate until something rouses it.
+            if (enemy.dead && enemy.rising === 0) continue;
             enemy.deathTimer -= delta;
             // How far through the fall we are, 0 at the killing blow.
             const fallen = THREE.MathUtils.clamp(
@@ -2029,21 +2048,37 @@ export const GameViewport3D = forwardRef<
               0,
               1,
             );
-            const settle = 1 - (1 - fallen) ** 2.4;
+            const settle = 1 - (1 - fallen) ** 2.6;
+
+            // A body falls by pivoting about its feet and ending flat. The
+            // previous version accumulated rotation.y every frame, which spun
+            // the corpse on the spot, and sank it into the floor at the same
+            // time — between them that is the rolling the player saw. This is
+            // a single rotation about one horizontal axis, so it reads as
+            // something going over rather than tumbling.
             if (enemy.deathCollapse) {
-              // Legs go: straight down, folding, with a small twist.
-              enemy.root.position.y = -0.42 * settle;
-              enemy.root.rotation.x = 0.34 * settle;
-              enemy.root.rotation.z = enemy.deathSpin * 0.18 * settle;
+              // Legs go first: folds down almost in place.
+              enemy.root.quaternion.setFromAxisAngle(
+                deathAxis.set(
+                  Math.cos(enemy.deathTopple),
+                  0,
+                  -Math.sin(enemy.deathTopple),
+                ),
+                1.42 * settle,
+              );
+              enemy.root.position.y = -0.08 * settle;
             } else {
-              // Topples away from the blow that landed.
-              enemy.root.rotation.x =
-                Math.cos(enemy.deathTopple) * enemy.deathLean * settle;
-              enemy.root.rotation.z =
-                -Math.sin(enemy.deathTopple) * enemy.deathLean * settle;
-              enemy.root.rotation.y += enemy.deathSpin * delta * (1 - settle);
-              enemy.root.position.y = -0.22 * settle;
+              // Topples away from the blow, ending flat on the floor.
+              deathAxis
+                .set(Math.cos(enemy.deathTopple), 0, -Math.sin(enemy.deathTopple))
+                .normalize();
+              enemy.root.quaternion.setFromAxisAngle(
+                deathAxis,
+                1.55 * enemy.deathLean * settle,
+              );
+              enemy.root.position.y = 0;
             }
+
             if (enemy.character) {
               updateAnimatedCharacter(
                 enemy.character,
@@ -2051,7 +2086,23 @@ export const GameViewport3D = forwardRef<
                 "death",
               );
             }
-            if (enemy.deathTimer <= 0) removeEnemy(enemy);
+            // Once it is down it stays down. Bodies used to vanish, which made
+            // a cleared floor look untouched; they now remain where they fell.
+            if (enemy.deathTimer <= 0 && !enemy.dead) {
+              enemy.dead = true;
+              enemy.restedAt = time;
+              enemy.healthBar.group.visible = false;
+              // Some of them are not finished. Which ones is decided here and
+              // never revealed, so no corpse can be assumed safe.
+              enemy.canRise = Math.random() < 0.34;
+              corpses.push(enemy);
+              // Bound the number kept, so a long fight cannot accumulate
+              // bodies without limit. The oldest is cleared first.
+              while (corpses.length > 12) {
+                const oldest = corpses.shift();
+                if (oldest) removeEnemy(oldest);
+              }
+            }
             continue;
           }
 
@@ -2370,8 +2421,10 @@ export const GameViewport3D = forwardRef<
               ),
             );
           enemy.healthBar.group.quaternion.copy(camera.quaternion);
+          // A body on the floor carries no bar. Leaving one floating over a
+          // corpse would also give away which ones are still a threat.
           enemy.healthBar.group.visible =
-            distance < 25 || enemy.hp < enemy.maxHp;
+            !enemy.dying && (distance < 25 || enemy.hp < enemy.maxHp);
         }
 
         livingEnemies.length = 0;
@@ -2728,7 +2781,76 @@ export const GameViewport3D = forwardRef<
           encounterStallClock = 0;
         }
 
-            // Doors.
+            // The ones that were not finished.
+        //
+        // Bodies stay where they fall, and some of them get back up. Which ones
+        // is decided when they land and never shown, so no corpse can be walked
+        // past safely — the floor behind you stops being cleared ground.
+        for (let index = corpses.length - 1; index >= 0; index -= 1) {
+          const corpse = corpses[index];
+          if (corpse.rising > 0) {
+            // Getting up: unwind the fall, then hand it back to the AI.
+            corpse.rising = Math.min(1, corpse.rising + delta * 1.35);
+            const remaining = 1 - corpse.rising;
+            const eased = remaining ** 1.6;
+            deathAxis
+              .set(Math.cos(corpse.deathTopple), 0, -Math.sin(corpse.deathTopple))
+              .normalize();
+            corpse.root.quaternion.setFromAxisAngle(
+              deathAxis,
+              1.55 * corpse.deathLean * eased,
+            );
+            corpse.root.position.y = 0;
+            if (corpse.character) {
+              updateAnimatedCharacter(corpse.character, delta, "hit");
+            }
+            if (corpse.rising >= 1) {
+              // Back on its feet and hunting.
+              corpse.rising = 0;
+              corpse.dead = false;
+              corpse.dying = false;
+              corpse.canRise = false;
+              corpse.deathTimer = 0;
+              corpse.hp = Math.max(24, Math.round(corpse.maxHp * 0.45));
+              corpse.root.quaternion.identity();
+              corpse.root.rotation.set(0, corpse.root.rotation.y, 0);
+              corpse.root.position.y = 0;
+              corpse.healthBar.group.visible = true;
+              corpse.attackClock = 0.35;
+              corpses.splice(index, 1);
+              encounterWasActive = true;
+            }
+            continue;
+          }
+
+          if (!corpse.canRise) continue;
+          // Not immediately, and not from across the room: it waits until the
+          // player is close enough to have decided it was safe.
+          if (time - corpse.restedAt < 6) continue;
+          const range = corpse.root.position.distanceTo(playerRoot.position);
+          if (range > 3.6) continue;
+          // Random, checked at a low rate, so walking the same corridor twice
+          // does not give the same result.
+          corpseCheckClock -= delta;
+          if (corpseCheckClock > 0) continue;
+          corpseCheckClock = 0.4;
+          if (Math.random() > 0.3) continue;
+
+          corpse.rising = 0.001;
+          current.onSound("zombie-scream", {
+            intensity: 1.15,
+            pan: panFor(corpse.root.position, 0.95),
+          });
+          current.onSound("zombie-lunge", {
+            intensity: 1,
+            pan: panFor(corpse.root.position, 0.9),
+          });
+          horrorPulse = Math.max(horrorPulse, 4.5);
+          cameraShake = Math.max(cameraShake, 0.42);
+          kickPitch += 0.09;
+        }
+
+        // Doors.
         //
         // A shut door now blocks, so it has to be opened rather than walked
         // through. The player pushes one open by walking into it, and the
