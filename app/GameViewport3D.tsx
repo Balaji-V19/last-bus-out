@@ -1366,10 +1366,12 @@ export const GameViewport3D = forwardRef<
           spawnEnemyInRoom("heavy", "triage", 0, -4.2);
         });
       } else if (current.chapter === "street" && current.step === 1) {
+        // Around the ring rather than ahead of the player: on a loop the threat
+        // that matters is the one entering behind you.
         arm(() => {
-          spawnEnemy("walker", -2.7, -55);
-          spawnEnemy("runner", 4.7, -63);
-          spawnEnemy("walker", 1.6, -78);
+          spawnEnemyInRoom("walker", "northRun", 6.4, 0);
+          spawnEnemyInRoom("runner", "eastRun", 0, -7.5);
+          spawnEnemyInRoom("walker", "dayroom", 1.6, 2.8);
         });
       } else if (current.chapter === "station" && current.step === 3) {
         arm(() => {
@@ -2001,7 +2003,7 @@ export const GameViewport3D = forwardRef<
               ? "hospital-blackout"
               : current.chapter === "street" &&
                   current.step >= 1 &&
-                  playerRoot.position.z < -36
+                  playerRoot.position.x < -12
                 ? "street-radio"
                 : current.chapter === "station" &&
                     current.step >= 3 &&

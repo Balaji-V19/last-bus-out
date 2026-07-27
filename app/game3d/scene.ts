@@ -1,7 +1,12 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { compileFloor, type FloorMaterials, type OccupancyGrid } from "./floorPlan";
-import { groundEmergencyPlan } from "./floors";
+import {
+  compileFloor,
+  type FloorMaterials,
+  type FloorPlan,
+  type OccupancyGrid,
+} from "./floorPlan";
+import { groundEmergencyPlan, ward2Plan } from "./floors";
 
 export type { OccupancyGrid } from "./floorPlan";
 export {
@@ -1068,6 +1073,157 @@ function lightRoom(
  * that has since been removed, which left nothing at all to see or walk toward.
  * It is now a real fire-escape door with a push bar and a lit running-man sign.
  */
+/**
+ * Shared scaffolding for a room-graph floor: compile the plan, light each room
+ * from its own footprint, hang its door plaque, and hand back helpers for
+ * placing props and interactions in room-relative coordinates.
+ */
+function beginRoomGraphFloor(
+  materials: MaterialSet,
+  plan: FloorPlan,
+  chapter: GameChapter,
+) {
+  const root = new THREE.Group();
+  const collisions: CollisionCircle[] = [];
+  const interactions: InteractionPoint[] = [];
+  baseScene(root, chapter);
+
+  const floor = compileFloor(plan, floorMaterialsFrom(materials));
+  root.add(floor.root);
+
+  const centreOf = (id: string) =>
+    floor.roomCentres.get(id) ?? new THREE.Vector3();
+
+  for (const room of plan.rooms) {
+    lightRoom(root, centreOf(room.id), room.size, room.light, room.ceiling);
+    if (!room.plaque) continue;
+    const plaque = textPanel(room.plaque, "#d7e0d4", "rgba(26,38,33,.94)");
+    const centre = centreOf(room.id);
+    plaque.position.set(centre.x, 2.28, centre.z + room.size[1] / 2 - 0.14);
+    plaque.scale.set(0.42, 0.34, 1);
+    root.add(plaque);
+  }
+
+  const place = (
+    object: THREE.Object3D,
+    room: string,
+    offsetX: number,
+    offsetZ: number,
+    radius?: number,
+  ) => {
+    const centre = centreOf(room);
+    object.position.x += centre.x + offsetX;
+    object.position.z += centre.z + offsetZ;
+    root.add(object);
+    if (radius) {
+      collisions.push({ x: centre.x + offsetX, z: centre.z + offsetZ, radius });
+    }
+    return object;
+  };
+
+  const at = (
+    room: string,
+    offsetX: number,
+    offsetZ: number,
+  ): [number, number, number] => {
+    const centre = centreOf(room);
+    return [centre.x + offsetX, 0, centre.z + offsetZ];
+  };
+
+  const finish = (): BuiltWorld => ({
+    root,
+    collisions,
+    interactions,
+    start: floor.start.clone(),
+    bounds: floor.bounds,
+    grid: floor.grid,
+    spawnPoints: floor.spawnPoints,
+  });
+
+  return { root, collisions, interactions, place, at, finish };
+}
+
+/**
+ * Floor 2 Patient Ward. A ring you can be followed around, rather than another
+ * straight corridor.
+ */
+function buildWard2(materials: MaterialSet): BuiltWorld {
+  const floor = beginRoomGraphFloor(materials, ward2Plan, "street");
+  const { place, at, interactions } = floor;
+
+  // Four-bed bays, laid out as they would be: two beds a side, curtain track
+  // between them, monitor at the head of each.
+  for (const bay of ["bayA", "bayB", "bayC", "bayD"] as const) {
+    for (const [index, offsetX] of [-2.6, 2.6].entries()) {
+      place(hospitalBed(materials, 0, 0, index === 0 ? 0 : Math.PI), bay, offsetX, -1.4, 1.2);
+      place(hospitalBed(materials, 0, 0, index === 0 ? 0 : Math.PI), bay, offsetX, 1.8, 1.2);
+    }
+    place(patientMonitor(materials, 0, 0, 0), bay, 0, -2.8, 0.65);
+    place(ivStand(materials, 0, 0, 0.18), bay, -3.6, 0.4);
+    place(oxygenTank(materials, 0, 0, 0), bay, 3.7, -3.1, 0.42);
+  }
+  place(liquidPuddle("#5d1d18", 0, 0, 2.8, 0.2), "bayB", 0.4, 0.6);
+  place(liquidPuddle("#445c52", 0, 0, 2.2, -0.3), "bayD", -1.2, 1.4);
+
+  // Ring corridors: trolleys parked along the outside, wheelchairs abandoned.
+  place(hospitalCart(materials, 0, 0), "northRun", -6.2, 1.1, 0.5);
+  place(hospitalCart(materials, 0, 0), "southRun", 7.4, -1.1, 0.5);
+  place(wheelchair(materials, 0, 0, Math.PI / 2), "westRun", 0.9, 6.4, 0.5);
+  place(wheelchair(materials, 0, 0, -0.5), "eastRun", -0.8, -5.2, 0.5);
+  place(medicalCabinet(materials, 0, 0, Math.PI / 2), "westRun", -1.2, -8.5, 0.55);
+  place(fireExtinguisher(materials, 0, 0, -Math.PI / 2), "eastRun", 1.4, 9.2, 0.28);
+  place(liquidPuddle("#3d5349", 0, 0, 3.4, 0.1), "southRun", -2.6, 0.4);
+  place(liquidPuddle("#4b6256", 0, 0, 2.6, -0.4), "eastRun", 0, 2.2);
+
+  place(hospitalReception(materials, 0, 0), "nurse", 0, 2.2, 1.6);
+  place(medicalCabinet(materials, 0, 0, -Math.PI / 2), "nurse", 3.8, -1.8, 0.55);
+  place(pharmacyShelf(materials, 0, 0, Math.PI / 2), "nurse", -3.9, -1.2, 0.7);
+
+  place(wheelchair(materials, 0, 0, 0.3), "dayroom", -2.4, 3.2, 0.5);
+  place(hospitalCart(materials, 0, 0), "dayroom", 2.8, -3.6, 0.5);
+  place(liquidPuddle("#4a6157", 0, 0, 3, 0.25), "dayroom", 0.4, 0.8);
+
+  interactions.push(
+    interactionObject(
+      floor.root,
+      "signal",
+      "Read the ward evacuation board",
+      at("nurse", 1.8, -3.2),
+      hospitalWardBoard(materials),
+    ),
+    interactionObject(
+      floor.root,
+      "maya",
+      "Help Dr. Maya Singh",
+      at("bayA", -0.6, 2.6),
+      hospitalSurvivorCot(materials),
+    ),
+    interactionObject(
+      floor.root,
+      "orderly",
+      "Free the trapped orderly",
+      at("bayC", 0.8, -2.4),
+      hospitalSurvivorCot(materials),
+    ),
+    interactionObject(
+      floor.root,
+      "pistol",
+      "Take the security pistol",
+      at("dayroom", -3.2, -4.2),
+      createEquipmentModel("pistol", 0.72),
+    ),
+    interactionObject(
+      floor.root,
+      "bike",
+      "Use the service lift to Basement B1",
+      at("liftLobby", 0, -2.4),
+      hospitalElevatorBank(materials, "B1", true),
+    ),
+  );
+
+  return floor.finish();
+}
+
 function stairwellExit(materials: MaterialSet) {
   const exit = new THREE.Group();
   exit.userData.staticInteraction = true;
@@ -1715,9 +1871,10 @@ function buildHospitalWing(
 
 export function buildWorld(chapter: GameChapter): BuiltWorld {
   const materials = createMaterials();
-  return chapter === "hospital"
-    ? buildHospital(materials)
-    : buildHospitalWing(materials, chapter);
+  // Floors are being migrated off the shared corridor one at a time.
+  if (chapter === "hospital") return buildHospital(materials);
+  if (chapter === "street") return buildWard2(materials);
+  return buildHospitalWing(materials, chapter);
 }
 
 export function disposeWorld(world: BuiltWorld) {
