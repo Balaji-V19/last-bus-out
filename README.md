@@ -94,6 +94,7 @@ development servers running after validation.
 ```bash
 npm run lint
 npm run validate:characters
+npm run validate:floors
 npm test
 npm run build:pages
 ```
@@ -102,6 +103,9 @@ npm run build:pages
 - `npm run validate:characters` loads every GLB and checks skeleton nodes, hand
   weights, finger control, head direction, knee tracking, foot direction, and
   walk-cycle symmetry.
+- `npm run validate:floors` compiles every room-graph floor plan, flood-fills
+  its occupancy grid from the player start, and fails if any room or opening is
+  unreachable — the usual cause being a doorway declared on the wrong wall.
 - `npm test` makes the vinext production build and verifies rendered HTML.
 - `npm run build:pages` creates the static `dist-pages` site used by GitHub
   Pages.
@@ -127,6 +131,19 @@ npx tsc --noEmit
 
 ### Three-dimensional world
 
+- `app/game3d/floorPlan.ts` compiles a floor described as rooms plus the
+  openings between them into geometry, an occupancy grid and legal spawn space.
+  Rooms are axis-aligned rectangles measured wall-centreline to
+  wall-centreline, so abutting rooms share one partition instead of two
+  coincident slabs. Doorways are cut out of the merged wall runs and receive a
+  frame, lintel, leaves, vision panels and hardware. Ceiling height is per room
+  and is the main atmospheric control in first person.
+- `app/game3d/floors.ts` holds the authored plans. Ground Floor Emergency is
+  built this way; the remaining floors still use the older corridor builder and
+  are being migrated one at a time.
+- Movement and enemy navigation sample the occupancy grid where a floor
+  provides one, which is what allows a non-rectangular plan and stops enemies
+  walking through walls and furniture.
 - `app/game3d/scene.ts` constructs the hospital entirely from reusable Three.js
   geometry and materials. It contains beds, IV stands, monitors, wheelchairs,
   oxygen tanks, pharmacy shelves, reception desks, cabinets, operating lamps,
@@ -203,6 +220,8 @@ app/
   game3d/
     animatedCharacter.ts    GLB loading, rigs, equipment, animation
     audio.ts                music and synthesized sound effects
+    floorPlan.ts            room-graph compiler, occupancy grid, doorways
+    floors.ts               authored floor plans
     scene.ts                hospital floor and prop construction
 public/
   audio/                    local music

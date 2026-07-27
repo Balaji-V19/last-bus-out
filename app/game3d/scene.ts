@@ -1,5 +1,10 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { compileFloor, type FloorMaterials, type OccupancyGrid } from "./floorPlan";
+import { groundEmergencyPlan } from "./floors";
+
+export type { OccupancyGrid } from "./floorPlan";
+export { gridAllows, gridSees } from "./floorPlan";
 
 export type GameChapter =
   | "hospital"
@@ -30,6 +35,14 @@ export type BuiltWorld = {
   interactions: InteractionPoint[];
   start: THREE.Vector3;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /**
+   * Walkability raster, present on floors built from a room graph. When set it
+   * is authoritative for movement and the collision circles are only a fallback
+   * for the floors still using the old corridor builder.
+   */
+  grid?: OccupancyGrid;
+  /** Legal standing positions by room, used to spawn enemies inside real rooms. */
+  spawnPoints?: Array<{ room: string; position: THREE.Vector3 }>;
 };
 
 type MaterialSet = {
@@ -291,12 +304,15 @@ function addFluorescent(
   x: number,
   z: number,
   intensity = 2.6,
+  // Height of the fitting. Room-graph floors pass their own ceiling height;
+  // the legacy corridor builder keeps the fixed 4.58 m it was authored against.
+  height = 4.58,
 ) {
   const housing = new THREE.Mesh(
     new THREE.BoxGeometry(1.9, 0.08, 0.42),
     new THREE.MeshStandardMaterial({ color: 0x555b57, roughness: 0.5 }),
   );
-  housing.position.set(x, 4.58, z);
+  housing.position.set(x, height, z);
   parent.add(housing);
   const panel = new THREE.Mesh(
     new THREE.BoxGeometry(1.65, 0.035, 0.27),
@@ -306,7 +322,7 @@ function addFluorescent(
       emissiveIntensity: 3.8,
     }),
   );
-  panel.position.set(x, 4.53, z);
+  panel.position.set(x, height - 0.05, z);
   parent.add(panel);
   // With the interior sun removed these fittings are the only general light, so
   // they carry more of the exposure than they used to. Reach is extended past
@@ -314,7 +330,7 @@ function addFluorescent(
   // reads as a gap in the ceiling rather than a dim corridor.
   const lampIntensity = intensity * 2.35;
   const light = new THREE.PointLight(0xdcebd2, lampIntensity, 17, 2);
-  light.position.set(x, 4.2, z);
+  light.position.set(x, height - 0.38, z);
   light.castShadow = false;
   light.userData.baseIntensity = lampIntensity;
   light.userData.flicker = true;
@@ -888,299 +904,164 @@ function baseScene(root: THREE.Group, chapter: GameChapter) {
   root.add(new THREE.HemisphereLight(ambient.sky, ambient.ground, ambient.level));
 }
 
+function floorMaterialsFrom(materials: MaterialSet): FloorMaterials {
+  return {
+    floor: materials.tile,
+    wall: materials.wall,
+    ceiling: materials.concreteDark,
+    trim: materials.paintedMetal,
+    door: materials.darkGreen,
+    doorGlass: materials.glass,
+  };
+}
+
+/** Ceiling fittings sized and placed from a room's own footprint. */
+function lightRoom(
+  root: THREE.Group,
+  centre: THREE.Vector3,
+  size: [number, number],
+  mode: "rows" | "single" | "sconce" | "emergency" | "dead",
+  ceiling: number,
+) {
+  if (mode === "dead") return;
+  const intensity =
+    mode === "rows" ? 1.15 : mode === "single" ? 0.95 : mode === "sconce" ? 0.6 : 0.42;
+  const positions: Array<[number, number]> = [];
+  if (mode === "rows") {
+    // Roughly one fitting per 9 square metres, in two rows down the long axis.
+    const alongZ = size[1] >= size[0];
+    const count = Math.max(2, Math.round((size[0] * size[1]) / 18));
+    for (let index = 0; index < count; index += 1) {
+      const t = (index + 0.5) / count - 0.5;
+      const lateral = index % 2 === 0 ? -0.24 : 0.24;
+      positions.push(
+        alongZ
+          ? [size[0] * lateral, size[1] * t]
+          : [size[0] * t, size[1] * lateral],
+      );
+    }
+  } else {
+    positions.push([0, 0]);
+  }
+  for (const [offsetX, offsetZ] of positions) {
+    addFluorescent(
+      root,
+      centre.x + offsetX,
+      centre.z + offsetZ,
+      intensity,
+      ceiling - 0.12,
+    );
+  }
+}
+
+/**
+ * Ground Floor Emergency, built from the room graph in floors.ts.
+ *
+ * Replaces the previous 17 x 128 m straight corridor whose "side rooms" were a
+ * door frame and a floor slab you could not enter.
+ */
 function buildHospital(materials: MaterialSet): BuiltWorld {
   const root = new THREE.Group();
   const collisions: CollisionCircle[] = [];
   const interactions: InteractionPoint[] = [];
   baseScene(root, "hospital");
 
-  box(root, [17, 0.22, 128], [0, -0.11, -55], materials.tile);
-  box(root, [0.34, 4.8, 128], [-8.35, 2.4, -55], materials.wall);
-  box(root, [0.34, 4.8, 128], [8.35, 2.4, -55], materials.wall);
-  box(root, [17, 0.18, 128], [0, 4.72, -55], materials.concreteDark);
-  box(root, [17, 4.8, 0.35], [0, 2.4, -119], materials.wall);
+  const floor = compileFloor(groundEmergencyPlan, floorMaterialsFrom(materials));
+  root.add(floor.root);
 
-  for (let z = 5; z >= -114; z -= 7.4) {
-    addFluorescent(root, z % 14.8 === 5 ? -2.7 : 2.7, z, z < -62 ? 1.1 : 2.5);
-  }
+  const centreOf = (id: string) =>
+    floor.roomCentres.get(id) ?? new THREE.Vector3();
+  const sizeOf = (id: string): [number, number] => {
+    const room = groundEmergencyPlan.rooms.find((entry) => entry.id === id);
+    return room ? room.size : [4, 4];
+  };
 
-  for (const [label, z, color] of [
-    ["TRIAGE", -8, "rgba(43,78,68,.96)"],
-    ["PHARMACY", -31, "rgba(49,70,83,.96)"],
-    ["SURGERY", -55, "rgba(76,45,42,.96)"],
-    ["EMERGENCY", -76, "rgba(95,34,29,.96)"],
-    ["ISOLATION", -96, "rgba(80,33,30,.96)"],
-    ["STAIRWELL A", -112, "rgba(34,70,55,.96)"],
-  ] as const) {
-    const sign = textPanel(label, "#e8eee5", color);
-    sign.position.set(0, 3.82, z);
-    sign.scale.set(0.66, 0.66, 0.66);
-    root.add(sign);
-  }
-
-  const reception = hospitalReception(materials, 7.05, -12);
-  reception.rotation.y = Math.PI / 2;
-  root.add(reception);
-  collisions.push({ x: 7.05, z: -12, radius: 1.05 });
-  const startBed = hospitalBed(materials, -5.4, 1.8, Math.PI / 2 - 0.08);
-  root.add(startBed);
-  collisions.push({ x: -5.4, z: 1.8, radius: 1.25 });
-  root.add(
-    pharmacyShelf(materials, -7.65, -34.5, Math.PI / 2),
-    pharmacyShelf(materials, 7.65, -38.2, -Math.PI / 2),
-    fireExtinguisher(materials, -7.88, -16.2, Math.PI / 2),
-    fireExtinguisher(materials, 7.88, -60.5, -Math.PI / 2),
-  );
-  collisions.push(
-    { x: -7.1, z: -34.5, radius: 0.65 },
-    { x: 7.1, z: -38.2, radius: 0.65 },
-  );
-
-  for (const side of [-1, 1]) {
-    for (let z = 2; z >= -112; z -= 8.5) {
-      box(
-        root,
-        [0.12, 0.11, 7.1],
-        [side * 7.93, 1.02, z - 3.5],
-        materials.paintedMetal,
-      );
-    }
-  }
-
-  for (const side of [-1, 1] as const) {
-    for (let z = -5; z >= -111; z -= 11) {
-      const frameX = side * 8.12;
-      box(root, [0.22, 2.8, 2.5], [frameX, 1.4, z], materials.metal);
-      const door = box(
-        root,
-        [0.13, 2.55, 1.14],
-        [side * 7.94, 1.27, z + 0.6],
-        materials.darkGreen,
-        [0, side * (0.22 + ((Math.abs(z) % 3) * 0.08)), 0],
-      );
-      door.castShadow = true;
-      const roomFloor = box(root, [5.2, 0.1, 7.8], [side * 10.65, -0.04, z], materials.concrete);
-      roomFloor.receiveShadow = true;
-      box(root, [0.24, 4.4, 7.8], [side * 13.2, 2.2, z], materials.concreteDark);
-    }
-  }
-
-  const bedA = hospitalBed(materials, -5.3, -29, Math.PI / 2 + 0.1);
-  root.add(bedA);
-  collisions.push({ x: -5.3, z: -29, radius: 1.25 });
-  const bedB = hospitalBed(materials, 5.4, -52, -Math.PI / 2 - 0.2);
-  root.add(bedB);
-  collisions.push({ x: 5.4, z: -52, radius: 1.25 });
-  const bedC = hospitalBed(materials, -4.8, -67, Math.PI / 2 - 0.32);
-  root.add(bedC);
-  collisions.push({ x: -4.8, z: -67, radius: 1.25 });
-  const bedD = hospitalBed(materials, 5.15, -91, -Math.PI / 2 + 0.18);
-  root.add(bedD);
-  collisions.push({ x: 5.15, z: -91, radius: 1.25 });
-  const bedE = hospitalBed(materials, -5.2, -108, Math.PI / 2 + 0.24);
-  root.add(bedE);
-  collisions.push({ x: -5.2, z: -108, radius: 1.25 });
-  root.add(hospitalCart(materials, 5.7, -17));
-  collisions.push({ x: 5.7, z: -17, radius: 0.7 });
-
-  const monitors = [
-    patientMonitor(materials, -6.15, -21, -Math.PI / 2),
-    patientMonitor(materials, 5.85, -39, Math.PI / 2),
-    patientMonitor(materials, -5.9, -72, -Math.PI / 2),
-    patientMonitor(materials, 5.9, -101, Math.PI / 2),
-  ];
-  for (const monitor of monitors) {
-    root.add(monitor);
-    collisions.push({
-      x: monitor.position.x,
-      z: monitor.position.z,
-      radius: 0.72,
-    });
-  }
-
-  for (const [x, z, rotation] of [
-    [-4.8, -30.8, 0.2],
-    [5.1, -50.1, -0.3],
-    [-5.6, -64.7, 0.4],
-    [6.2, -77.2, -0.2],
-    [-5.5, -96.4, 0.35],
-    [5.6, -111.2, -0.15],
-    [5.7, -7.8, 0.1],
-  ] as const) {
-    root.add(ivStand(materials, x, z, rotation));
-  }
-
-  for (const [x, z, rotation] of [
-    [-6.7, -12.5, 0],
-    [6.55, -34.5, 0.3],
-    [-6.5, -57.2, -0.3],
-    [6.4, -83.2, 0.2],
-    [-6.35, -104.2, -0.22],
-  ] as const) {
-    root.add(oxygenTank(materials, x, z, rotation));
-    collisions.push({ x, z, radius: 0.42 });
-  }
-
-  const wheelchairs = [
-    wheelchair(materials, 5.45, -27.4, -Math.PI / 2 + 0.18),
-    wheelchair(materials, -5.2, -47.5, Math.PI / 2 - 0.36),
-    wheelchair(materials, 5.3, -109.5, -Math.PI / 2 + 0.22),
-  ];
-  for (const chair of wheelchairs) {
-    root.add(chair);
-    collisions.push({
-      x: chair.position.x,
-      z: chair.position.z,
-      radius: 0.88,
-    });
-  }
-
-  const cabinets = [
-    medicalCabinet(materials, -7.72, -18, Math.PI / 2),
-    medicalCabinet(materials, 7.72, -41, -Math.PI / 2),
-    medicalCabinet(materials, -7.72, -99, Math.PI / 2),
-  ];
-  for (const cabinet of cabinets) root.add(cabinet);
-
-  root.add(operatingLamp(materials, -1.4, -63));
-  root.add(liquidPuddle("#355f55", 2.5, -14, 3.3, 0.28));
-  root.add(liquidPuddle("#6a201b", -1.7, -35, 2.5, -0.42));
-  root.add(liquidPuddle("#4b6256", 3.5, -61.5, 3.7, 0.12));
-  root.add(liquidPuddle("#671b18", -2.7, -76, 2.1, 0.7));
-  root.add(liquidPuddle("#31544d", 2.2, -94, 3.6, -0.18));
-  root.add(liquidPuddle("#561410", -1.2, -110, 2.8, 0.32));
-
-  const curtainMaterial = new THREE.MeshStandardMaterial({
-    color: 0x789a8d,
-    roughness: 0.96,
-    transparent: true,
-    opacity: 0.74,
-    side: THREE.DoubleSide,
-  });
-  for (const [x, z, rotation] of [
-    [-5.8, -37, 0.12],
-    [5.8, -68, -0.16],
-    [-5.7, -103, 0.22],
-  ] as const) {
-    const rail = new THREE.Mesh(
-      new THREE.TorusGeometry(1.15, 0.025, 8, 30, Math.PI * 1.35),
-      materials.metal,
-    );
-    rail.position.set(x, 2.65, z);
-    rail.rotation.x = Math.PI / 2;
-    rail.rotation.z = rotation;
-    root.add(rail);
-    const curtain = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.15, 1.85, 12, 4),
-      curtainMaterial,
-    );
-    const positions = curtain.geometry.attributes.position;
-    for (let vertex = 0; vertex < positions.count; vertex += 1) {
-      positions.setZ(vertex, Math.sin(positions.getX(vertex) * 13) * 0.055);
-    }
-    positions.needsUpdate = true;
-    curtain.position.set(x, 1.72, z);
-    curtain.rotation.y = Math.PI / 2 + rotation;
-    curtain.castShadow = true;
-    root.add(curtain);
-  }
-
-  for (const side of [-1, 1]) {
-    for (let z = 1; z >= -114; z -= 18) {
-      const pipeMaterial = side === -1 ? materials.metal : materials.rust;
-      cylinder(
-        root,
-        [0.07, 0.07],
-        15.5,
-        [side * 7.55, 4.25, z - 7.4],
-        pipeMaterial,
-        [Math.PI / 2, 0, 0],
-      );
-      for (let offset = 0; offset < 3; offset += 1) {
-        cylinder(
-          root,
-          [0.085, 0.085],
-          0.7,
-          [side * 7.55, 3.9, z - offset * 5],
-          pipeMaterial,
-        );
-      }
-    }
-  }
-
-  for (let i = 0; i < 44; i += 1) {
-    const random = seededNoise(380 + i);
-    const x = -6.8 + random() * 13.6;
-    const z = -6 - random() * 106;
-    if (i % 3 === 0) {
-      cylinder(
-        root,
-        [0.035 + random() * 0.025, 0.035 + random() * 0.025],
-        0.14 + random() * 0.22,
-        [x, 0.05, z],
-        i % 2 === 0 ? materials.white : materials.darkGreen,
-        [Math.PI / 2, random() * Math.PI, 0],
-      );
-    } else {
-      box(
-        root,
-        [0.08 + random() * 0.18, 0.025, 0.08 + random() * 0.24],
-        [x, 0.04, z],
-        i % 4 === 0 ? materials.red : materials.white,
-        [0, random() * Math.PI, 0],
-      );
-    }
-  }
-
-  for (let i = 0; i < 58; i += 1) {
-    const random = seededNoise(90 + i);
-    const debris = box(
+  for (const room of groundEmergencyPlan.rooms) {
+    lightRoom(
       root,
-      [0.12 + random() * 0.42, 0.025 + random() * 0.05, 0.12 + random() * 0.42],
-      [-6.8 + random() * 13.6, 0.04, -3 - random() * 110],
-      i % 4 === 0 ? materials.rust : materials.concreteDark,
-      [random() * 0.2, random() * Math.PI, random() * 0.2],
+      centreOf(room.id),
+      room.size,
+      room.light,
+      room.ceiling,
     );
-    debris.castShadow = false;
+    if (!room.plaque) continue;
+    const plaque = textPanel(room.plaque, "#d7e0d4", "rgba(26,38,33,.94)");
+    const centre = centreOf(room.id);
+    plaque.position.set(centre.x, 2.28, centre.z + sizeOf(room.id)[1] / 2 - 0.14);
+    plaque.scale.set(0.42, 0.34, 1);
+    root.add(plaque);
   }
 
-  const exitSign = textPanel("STAIRWELL A · FLOOR 2", "#d9eadb", "rgba(28,74,54,.96)");
-  exitSign.position.set(0, 4.12, -118.5);
-  exitSign.scale.set(1.15, 1.15, 1);
-  root.add(exitSign);
-  const exitDoorMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2c4d3e,
-    roughness: 0.62,
-    metalness: 0.22,
-  });
-  for (const side of [-1, 1]) {
-    roundedBox(
-      root,
-      [1.52, 3.52, 0.18],
-      [side * 0.8, 1.76, -118.74],
-      exitDoorMaterial,
-      0.08,
-    );
-    roundedBox(
-      root,
-      [0.78, 1.35, 0.04],
-      [side * 0.8, 2.25, -118.62],
-      materials.glass,
-      0.05,
-    );
-    cylinder(
-      root,
-      [0.035, 0.035],
-      0.42,
-      [side * 0.28, 1.68, -118.48],
-      materials.metal,
-      [Math.PI / 2, 0, 0],
-      10,
+  const place = (
+    object: THREE.Object3D,
+    room: string,
+    offsetX: number,
+    offsetZ: number,
+    radius?: number,
+  ) => {
+    const centre = centreOf(room);
+    object.position.x += centre.x + offsetX;
+    object.position.z += centre.z + offsetZ;
+    root.add(object);
+    if (radius) {
+      collisions.push({
+        x: centre.x + offsetX,
+        z: centre.z + offsetZ,
+        radius,
+      });
+    }
+    return object;
+  };
+
+  // Ambulance receiving: the only daylight in the game, and it is grey.
+  place(hospitalReception(materials, 0, 0), "vestibule", 4.4, -2.6, 1.5);
+  place(wheelchair(materials, 0, 0, Math.PI / 2), "vestibule", -4.2, 1.4, 0.5);
+  place(wheelchair(materials, 0, 0, -0.4), "vestibule", -2.6, -2.2, 0.5);
+  place(liquidPuddle("#3f5a50", 0, 0, 2.6, 0.2), "vestibule", 1.2, 2.4);
+
+  // Triage hall: curtained bays down one side, trolleys parked along the other.
+  for (const [index, offsetZ] of [-5.2, -1.4, 2.6, 5.4].entries()) {
+    place(
+      hospitalBed(materials, 0, 0, index % 2 === 0 ? Math.PI / 2 : -Math.PI / 2),
+      "triage",
+      index % 2 === 0 ? -4.6 : 4.6,
+      offsetZ,
+      1.2,
     );
   }
-  box(root, [0.08, 3.6, 0.25], [0, 1.8, -118.6], materials.metal);
+  place(patientMonitor(materials, 0, 0, Math.PI / 2), "triage", -5.4, -3.2, 0.65);
+  place(patientMonitor(materials, 0, 0, -Math.PI / 2), "triage", 5.4, 1.1, 0.65);
+  place(ivStand(materials, 0, 0, 0.2), "triage", -3.9, 4.1);
+  place(ivStand(materials, 0, 0, -0.3), "triage", 3.8, -4.6);
+  place(oxygenTank(materials, 0, 0, 0.2), "triage", 5.9, -5.8, 0.42);
+  place(liquidPuddle("#5d1d18", 0, 0, 3, -0.3), "triage", -1.4, -1.8);
+
+  place(hospitalBed(materials, 0, 0, 0), "bayA", 2.2, 0, 1.2);
+  place(medicalCabinet(materials, 0, 0, -Math.PI / 2), "bayA", -4.4, -1.2, 0.55);
+  place(hospitalBed(materials, 0, 0, 0), "bayB", 2.4, 1.4, 1.2);
+  place(oxygenTank(materials, 0, 0, 0), "bayB", -4.2, -2.2, 0.42);
+  place(liquidPuddle("#4a6157", 0, 0, 2.2, 0.4), "bayB", 0.4, -1.2);
+
+  place(hospitalReception(materials, 0, 0), "nurse", 0, 1.9, 1.6);
+  place(medicalCabinet(materials, 0, 0, Math.PI / 2), "nurse", 3.9, -1.6, 0.55);
+
+  place(operatingLamp(materials, 0, 0), "resus", 0, 0.6);
+  place(hospitalBed(materials, 0, 0, Math.PI / 2), "resus", 0, 0.6, 1.2);
+  place(hospitalCart(materials, 0, 0), "resus", -2.8, -2.4, 0.5);
+  place(patientMonitor(materials, 0, 0, 0), "resus", 2.9, -2.2, 0.65);
+
+  place(fireExtinguisher(materials, 0, 0, 0), "southHall", -5.9, 3.2, 0.28);
+  place(liquidPuddle("#3d5349", 0, 0, 3.4, 0.1), "southHall", 1.8, 0.6);
+  place(hospitalCart(materials, 0, 0), "southHall", 4.6, -2.2, 0.5);
+
+  place(toolBench(materials, 0, 0, Math.PI / 2), "radiology", -3.8, 0.4, 1.3);
+  place(pharmacyShelf(materials, 0, 0, -Math.PI / 2), "radiology", 4.4, -1.4, 0.7);
+
+  place(liquidPuddle("#4b6256", 0, 0, 3.2, -0.2), "subWait", 0, 1.6);
+  place(hospitalCart(materials, 0, 0), "subWait", -3.6, -2.8, 0.5);
 
   const breaker = new THREE.Group();
+  breaker.userData.staticInteraction = true;
   roundedBox(breaker, [0.72, 0.92, 0.26], [0, 0.35, 0], materials.paintedMetal, 0.06);
   roundedBox(breaker, [0.44, 0.17, 0.035], [0, 0.52, 0.15], materials.glass, 0.025);
   for (const x of [-0.16, 0, 0.16]) {
@@ -1188,20 +1069,27 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
   }
   box(breaker, [0.12, 0.34, 0.08], [0, 0.02, 0.17], materials.rust, [0, 0, -0.32]);
 
+  const at = (room: string, offsetX: number, offsetZ: number): [number, number, number] => {
+    const centre = centreOf(room);
+    return [centre.x + offsetX, 0, centre.z + offsetZ];
+  };
+
   interactions.push(
-    interactionObject(root, "torch", "Take torch", [1.4, 0, -10], createEquipmentModel("torch", 1)),
-    interactionObject(root, "radio", "Check emergency radio", [-4.6, 0, -26], createEquipmentModel("radio", 1)),
-    interactionObject(root, "axe", "Take fire axe", [4.7, 0, -45], createEquipmentModel("axe", 1)),
-    interactionObject(root, "breaker", "Reset stairwell power", [6.6, 0, -92], breaker),
-    interactionObject(root, "exit", "Enter Stairwell A", [0, 0, -115], new THREE.Group()),
+    interactionObject(root, "torch", "Take torch", at("vestibule", -1.8, -3.4), createEquipmentModel("torch", 1)),
+    interactionObject(root, "radio", "Check emergency radio", at("nurse", -1.4, 1.4), createEquipmentModel("radio", 1), "desk"),
+    interactionObject(root, "axe", "Take fire axe", at("resus", 3.2, 2.8), createEquipmentModel("axe", 1)),
+    interactionObject(root, "breaker", "Reset stairwell power", at("radiology", 4.2, 2.6), breaker),
+    interactionObject(root, "exit", "Enter Stairwell A", at("stairwell", 0, -2.6), new THREE.Group()),
   );
 
   return {
     root,
     collisions,
     interactions,
-    start: new THREE.Vector3(0, 0, 7),
-    bounds: { minX: -7.55, maxX: 7.55, minZ: -116, maxZ: 8 },
+    start: floor.start.clone(),
+    bounds: floor.bounds,
+    grid: floor.grid,
+    spawnPoints: floor.spawnPoints,
   };
 }
 

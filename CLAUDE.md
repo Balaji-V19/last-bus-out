@@ -59,12 +59,14 @@ Run these after relevant changes:
 npx tsc --noEmit
 npm run lint
 npm run validate:characters
+npm run validate:floors
 npm test
 npm run build:pages
 ```
 
-Character or animation changes require all five. A copy-only change may omit
-the gait validator if no GLB or animation mapping was touched.
+Character or animation changes require all six. A copy-only change may omit
+the gait validator if no GLB or animation mapping was touched. Any change to a
+room-graph floor plan or to the floor compiler requires `validate:floors`.
 
 ## Git and deployment
 

@@ -24,6 +24,8 @@ import type {
 import {
   buildWorld,
   disposeWorld,
+  gridAllows,
+  type BuiltWorld,
   type EquipmentKind,
   type GameChapter,
 } from "./game3d/scene";
@@ -83,6 +85,12 @@ type HealthBar = {
   width: number;
 };
 
+/**
+ * Headings tried when an enemy's direct path is blocked, in order. Straight on
+ * first, then progressively wider sweeps to either side.
+ */
+const ENEMY_AVOID_ANGLES = [0, 0.61, -0.61, 1.22, -1.22, 1.83, -1.83];
+
 type EnemyActor = {
   id: number;
   style: "walker" | "runner" | "heavy";
@@ -101,6 +109,8 @@ type EnemyActor = {
   hitTimer: number;
   deathTimer: number;
   dying: boolean;
+  /** Seconds spent unable to advance, used to break out of a wall wedge. */
+  stuckClock: number;
   root: THREE.Group;
   character: AnimatedCharacter | null;
   healthBar: HealthBar;
@@ -172,12 +182,22 @@ function isInteractionAvailable(
   return false;
 }
 
-function playerCanOccupy(
+/**
+ * Whether an actor of `radius` can stand at (x, z).
+ *
+ * Floors built from a room graph carry an occupancy grid, which is the only
+ * thing that can describe a non-rectangular plan; it is a constant-cost lookup
+ * rather than a linear scan over every prop. Floors still using the legacy
+ * corridor builder fall back to the rectangle-plus-circles test.
+ */
+function canOccupy(
+  world: BuiltWorld,
   x: number,
   z: number,
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
-  collisions: Array<{ x: number; z: number; radius: number }>,
+  radius = 0.48,
 ) {
+  if (world.grid) return gridAllows(world.grid, x, z, radius);
+  const { bounds, collisions } = world;
   if (
     x < bounds.minX ||
     x > bounds.maxX ||
@@ -189,7 +209,7 @@ function playerCanOccupy(
   return !collisions.some(
     (collision) =>
       Math.hypot(x - collision.x, z - collision.z) <
-      collision.radius + 0.48,
+      collision.radius + radius,
   );
 }
 
@@ -674,6 +694,7 @@ export const GameViewport3D = forwardRef<
         hitTimer: 0,
         deathTimer: 0,
         dying: false,
+        stuckClock: 0,
         root,
         character: null,
         healthBar,
@@ -704,6 +725,30 @@ export const GameViewport3D = forwardRef<
         actor.character = character;
         root.add(character.root);
       });
+    };
+
+    /**
+     * Spawn inside a named room of a room-graph floor. The offset is nudged
+     * back toward the room centre until it lands on walkable floor, so an
+     * encounter can never place an enemy inside a wall or a prop.
+     */
+    const spawnEnemyInRoom = (
+      style: "walker" | "runner" | "heavy",
+      room: string,
+      offsetX = 0,
+      offsetZ = 0,
+    ) => {
+      const anchor = world.spawnPoints?.find((entry) => entry.room === room);
+      if (!anchor) return;
+      for (let attempt = 0; attempt <= 4; attempt += 1) {
+        const scale = 1 - attempt * 0.25;
+        const x = anchor.position.x + offsetX * scale;
+        const z = anchor.position.z + offsetZ * scale;
+        if (canOccupy(world, x, z, 0.44)) {
+          spawnEnemy(style, x, z);
+          return;
+        }
+      }
     };
 
     const removeEnemy = (enemy: EnemyActor) => {
@@ -1124,15 +1169,17 @@ export const GameViewport3D = forwardRef<
       encounterKey = spawnKey;
       encounterWasActive = false;
       if (current.chapter === "hospital" && current.step === 3) {
-        spawnEnemy("walker", 0.4, -59);
-        spawnEnemy("runner", -3.8, -69);
-        spawnEnemy("walker", 4.6, -78);
+        // Room-relative now that Ground Emergency is a room graph rather than a
+        // corridor: the old absolute coordinates sat outside the new footprint.
+        spawnEnemyInRoom("walker", "triage", -2.6, -3.4);
+        spawnEnemyInRoom("runner", "bayB", 1.8, -1.2);
+        spawnEnemyInRoom("walker", "nurse", 1.4, -1.8);
         encounterWasActive = true;
       } else if (current.chapter === "hospital" && current.step === 5) {
-        spawnEnemy("walker", -4.6, -101);
-        spawnEnemy("runner", 4.8, -106);
-        spawnEnemy("walker", 3.4, -114);
-        spawnEnemy("heavy", -2.8, -116);
+        spawnEnemyInRoom("walker", "southHall", -3.2, 1.4);
+        spawnEnemyInRoom("runner", "radiology", 2.6, -1.6);
+        spawnEnemyInRoom("walker", "subWait", 2.2, 2.4);
+        spawnEnemyInRoom("heavy", "stairwell", 0, 2.6);
         encounterWasActive = true;
       } else if (current.chapter === "street" && current.step === 1) {
         spawnEnemy("walker", -2.7, -55);
@@ -1285,24 +1332,10 @@ export const GameViewport3D = forwardRef<
         if (moving) {
           const nextX = playerRoot.position.x + movement.x * travel;
           const nextZ = playerRoot.position.z + movement.z * travel;
-          if (
-            playerCanOccupy(
-              nextX,
-              playerRoot.position.z,
-              world.bounds,
-              world.collisions,
-            )
-          ) {
+          if (canOccupy(world, nextX, playerRoot.position.z)) {
             playerRoot.position.x = nextX;
           }
-          if (
-            playerCanOccupy(
-              playerRoot.position.x,
-              nextZ,
-              world.bounds,
-              world.collisions,
-            )
-          ) {
+          if (canOccupy(world, playerRoot.position.x, nextZ)) {
             playerRoot.position.z = nextZ;
           }
           if (current.pov !== "first") {
@@ -1533,14 +1566,43 @@ export const GameViewport3D = forwardRef<
               Math.sin(time * 0.66 + enemy.gaitPhase * 1.7) > 0.92
                 ? 0.24
                 : 1;
-            enemy.root.position.addScaledVector(
-              enemyChaseDirection,
+            const step =
               enemy.speed *
-                enemy.pace *
-                Math.max(0.28, gaitPulse) *
-                hesitation *
-                delta,
-            );
+              enemy.pace *
+              Math.max(0.28, gaitPulse) *
+              hesitation *
+              delta;
+
+            // Enemies used to move with no collision at all, walking through
+            // beds, walls and each other. With real rooms that is fatal to the
+            // illusion, so the step is tested first and, if blocked, retried at
+            // widening angles before giving up for this frame.
+            let moved = false;
+            for (const sweep of ENEMY_AVOID_ANGLES) {
+              const angle = Math.atan2(
+                enemyChaseDirection.x,
+                enemyChaseDirection.z,
+              ) + sweep;
+              const tryX = enemy.root.position.x + Math.sin(angle) * step;
+              const tryZ = enemy.root.position.z + Math.cos(angle) * step;
+              if (!canOccupy(world, tryX, tryZ, 0.44)) continue;
+              enemy.root.position.x = tryX;
+              enemy.root.position.z = tryZ;
+              if (sweep !== 0) {
+                enemyChaseDirection.set(Math.sin(angle), 0, Math.cos(angle));
+              }
+              moved = true;
+              break;
+            }
+            if (!moved) enemy.stuckClock += delta;
+            else enemy.stuckClock = 0;
+            // Wedged against geometry for long enough: pick a new heading
+            // rather than grinding into the wall forever.
+            if (enemy.stuckClock > 1.5) {
+              enemy.stuckClock = 0;
+              enemy.targetTurnBias = (Math.random() - 0.5) * 2.4;
+            }
+
             const targetRotation = Math.atan2(
               -enemyChaseDirection.x,
               -enemyChaseDirection.z,
@@ -1666,14 +1728,17 @@ export const GameViewport3D = forwardRef<
         for (const enemy of enemies) {
           if (!enemy.dying) livingEnemies.push(enemy);
         }
+        // Ground Emergency is a room graph now, so its two thresholds are tied
+        // to the new footprint: the blackout fires on entering the triage hall
+        // and the curtain scare on committing to the south link.
         const scareKey =
           current.chapter === "hospital" &&
           current.step >= 3 &&
-          playerRoot.position.z < -48
+          playerRoot.position.z < -10
             ? "hospital-curtain"
             : current.chapter === "hospital" &&
                 current.step >= 1 &&
-                playerRoot.position.z < -22
+                playerRoot.position.z < 2
               ? "hospital-blackout"
               : current.chapter === "street" &&
                   current.step >= 1 &&
@@ -1705,12 +1770,20 @@ export const GameViewport3D = forwardRef<
             { intensity: scareKey === "hospital-curtain" ? 1.15 : 0.88 },
           );
           if (scareKey === "hospital-curtain") {
-            spawnEnemy(
-              "runner",
-              playerRoot.position.x > 0 ? -5.8 : 5.8,
-              Math.max(world.bounds.minZ + 5, playerRoot.position.z - 8),
-            );
-            encounterWasActive = true;
+            // Behind the player, and only somewhere they could actually stand.
+            const behindZ = playerRoot.position.z + 7;
+            const candidates: Array<[number, number]> = [
+              [playerRoot.position.x, behindZ],
+              [playerRoot.position.x - 3.2, behindZ],
+              [playerRoot.position.x + 3.2, behindZ],
+              [playerRoot.position.x, playerRoot.position.z + 4],
+            ];
+            for (const [x, z] of candidates) {
+              if (!canOccupy(world, x, z, 0.44)) continue;
+              spawnEnemy("runner", x, z);
+              encounterWasActive = true;
+              break;
+            }
           }
         }
 
