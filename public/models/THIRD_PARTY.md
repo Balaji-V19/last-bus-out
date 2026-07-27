@@ -73,6 +73,35 @@ or as part of a sound pack. The credits above are recorded because this
 repository requires provenance for every external asset, not because the
 license demands attribution.
 
+### Weapon and gore one-shots
+
+`public/audio/weapons/*.ogg` are cut from Freesound recordings. Every item is
+**CC0 1.0 Universal**, which requires no attribution; the credits below are
+recorded because this repository requires provenance for every external asset.
+
+License URL for all of the following:
+<https://creativecommons.org/publicdomain/zero/1.0/>
+
+| Game file | Creator | Source |
+| --- | --- | --- |
+| `axe-swing-a` | ErikCruzDev | https://freesound.org/people/ErikCruzDev/sounds/735907/ |
+| `axe-swing-b` | GaussTheWizard | https://freesound.org/people/GaussTheWizard/sounds/367182/ |
+| `axe-flesh-a` | JoseAgudelo | https://freesound.org/people/JoseAgudelo/sounds/472502/ |
+| `axe-flesh-b`, `axe-flesh-d`, `axe-flesh-e` | TheFilmLook | https://freesound.org/people/TheFilmLook/sounds/365574/ |
+| `axe-flesh-c` | magnuswaker | https://freesound.org/people/magnuswaker/sounds/697829/ |
+| `axe-wall-a` | dslrguide | https://freesound.org/people/dslrguide/sounds/321482/ |
+| `axe-wall-b` | dslrguide | https://freesound.org/people/dslrguide/sounds/321477/ |
+| `bone-a` | Vinni_R | https://freesound.org/people/Vinni_R/sounds/630594/ |
+| `knife-slash-a` | SamuelGremaud | https://freesound.org/people/SamuelGremaud/sounds/573300/ |
+| `squelch-a` | SoundDesignForYou | https://freesound.org/people/SoundDesignForYou/sounds/649982/ |
+
+- Retrieved: 2026-07-27
+- Local changes: cut to individual one-shots where the source was a multi-take
+  session, downmixed to mono, resampled to 32 kHz, loudness-normalised to
+  −16 LUFS with −1.5 dBTP, faded at both ends and encoded to Ogg Vorbis. The
+  three `axe-flesh` cuts marked TheFilmLook come from separate strikes within
+  one 46-second take.
+
 The remaining creature cues — breathing, the windup before a swing, the wet
 impact of a blow, the caught breath after one — are synthesised at runtime by
 `app/game3d/voice.ts` and carry no third-party license. They also serve as the

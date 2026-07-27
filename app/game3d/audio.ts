@@ -121,14 +121,27 @@ const VOICE_SAMPLES: Partial<Record<VoiceKind | "impact", readonly string[]>> = 
 const EVENT_SAMPLES: Partial<Record<GameSoundEvent, readonly string[]>> = {
   "zombie-attack": ["creatures/attack-a", "creatures/attack-b", "creatures/attack-c"],
   "zombie-death": ["creatures/death-a", "creatures/death-b"],
-  // Weapon recordings are optional. Each of these falls back to its
-  // synthesised version if the file is absent, so the slots can be filled in
-  // later without touching code. See docs/AUDIO_SOURCES.md for the exact
-  // CC0 items these expect.
+  // Weapon recordings. Each falls back to its synthesised version if the file
+  // is absent. Provenance is in public/models/THIRD_PARTY.md.
   "axe-swing": ["weapons/axe-swing-a", "weapons/axe-swing-b"],
-  "axe-flesh": ["weapons/axe-flesh-a", "weapons/axe-flesh-b", "weapons/axe-flesh-c"],
+  "axe-flesh": [
+    "weapons/axe-flesh-a",
+    "weapons/axe-flesh-b",
+    "weapons/axe-flesh-c",
+    "weapons/axe-flesh-d",
+    "weapons/axe-flesh-e",
+  ],
   "axe-wall": ["weapons/axe-wall-a", "weapons/axe-wall-b"],
+  "zombie-hit": ["weapons/squelch-a"],
 };
+
+/** Layered under other cues rather than played on their own. */
+const LAYER_SAMPLES = {
+  /** Blade character under the swing, so the axe reads as edged not blunt. */
+  bladeSlash: "weapons/knife-slash-a",
+  /** Bone giving way, layered onto a killing blow. */
+  boneSnap: "weapons/bone-a",
+} as const;
 
 export class SurvivalAudio {
   private context: AudioContext | null = null;
@@ -211,6 +224,7 @@ export class SurvivalAudio {
   private loadSample(context: AudioContext, name: string) {
     if (this.sampleBank.has(name)) return;
     if (this.sampleLoads.has(name)) return;
+    if (typeof document === "undefined" || typeof fetch !== "function") return;
     const url = new URL(`audio/${name}.ogg`, document.baseURI).toString();
     const load = fetch(url)
       .then((response) => {
@@ -234,6 +248,9 @@ export class SurvivalAudio {
     }
     for (const names of Object.values(EVENT_SAMPLES)) {
       for (const name of names ?? []) this.loadSample(context, name);
+    }
+    for (const name of Object.values(LAYER_SAMPLES)) {
+      this.loadSample(context, name);
     }
   }
 
@@ -629,7 +646,10 @@ export class SurvivalAudio {
     }
 
     if (event === "zombie-hit") {
-      this.playVoice("impact", 0.8 * intensity, pan, 0.12);
+      // Recorded squelch over the synthesised body of the blow.
+      const hit = EVENT_SAMPLES["zombie-hit"];
+      if (hit) this.playSample(hit, 0.6 * intensity, pan, 0.14);
+      this.playVoice("impact", 0.7 * intensity, pan, 0.12);
       return;
     }
 
@@ -687,6 +707,14 @@ export class SurvivalAudio {
     // low whoosh that rises as the head accelerates, not the short hiss a
     // generic melee cue uses.
     if (event === "axe-swing") {
+      const swing = EVENT_SAMPLES["axe-swing"];
+      if (swing && this.playSample(swing, 0.78 * intensity, pan, 0.09)) {
+        // A quiet blade layer under the recorded whoosh, so the axe reads as
+        // edged rather than as a club. Layering a second, lighter recording is
+        // the oldest trick in creature and weapon design.
+        this.playSample([LAYER_SAMPLES.bladeSlash], 0.26 * intensity, pan, 0.12);
+        return;
+      }
       this.noiseBurst(0.34, 0.075 * intensity, "bandpass", 260, pan, 0, 900);
       this.noiseBurst(0.22, 0.04 * intensity, "highpass", 1400, pan, 0.08);
       this.tone(150, 0.26, 0.026 * intensity, "sine", pan, 78, 0.04);
@@ -696,16 +724,28 @@ export class SurvivalAudio {
     // Burying it in a body: a blunt crack through bone, the wet impact, and a
     // short metallic ring off the head.
     if (event === "axe-flesh") {
-      this.playVoice("impact", 0.92 * intensity, pan, 0.09);
-      this.noiseBurst(0.09, 0.11 * intensity, "bandpass", 2100, pan, 0, 420);
-      this.tone(96, 0.2, 0.09 * intensity, "sine", pan, 42, 0.012);
-      this.tone(1730, 0.13, 0.022 * intensity, "triangle", pan, 1180, 0.016);
+      const flesh = EVENT_SAMPLES["axe-flesh"];
+      const played = flesh
+        ? this.playSample(flesh, 0.9 * intensity, pan, 0.08)
+        : false;
+      if (!played) {
+        this.playVoice("impact", 0.92 * intensity, pan, 0.09);
+        this.noiseBurst(0.09, 0.11 * intensity, "bandpass", 2100, pan, 0, 420);
+        this.tone(96, 0.2, 0.09 * intensity, "sine", pan, 42, 0.012);
+      }
+      // Bone under the heaviest blows only, so it stays an event rather than
+      // becoming part of the texture of every swing.
+      if (intensity > 0.9) {
+        this.playSample([LAYER_SAMPLES.boneSnap], 0.55 * intensity, pan, 0.1);
+      }
       return;
     }
 
     // Missing, and hitting tile or steel instead: a bright ring with no wet
     // component at all, which is what tells the player they whiffed.
     if (event === "axe-wall") {
+      const wall = EVENT_SAMPLES["axe-wall"];
+      if (wall && this.playSample(wall, 0.72 * intensity, pan, 0.1)) return;
       this.noiseBurst(0.06, 0.1 * intensity, "highpass", 3200, pan);
       this.tone(2450, 0.34, 0.05 * intensity, "triangle", pan, 1850, 0.008);
       this.tone(1290, 0.42, 0.036 * intensity, "sine", pan, 940, 0.012);
