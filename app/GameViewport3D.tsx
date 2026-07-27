@@ -531,6 +531,7 @@ export const GameViewport3D = forwardRef<
     let combatScore = 0;
     let escapeDirectorClock = 7;
     let statsClock = 0;
+    let progressReportClock = 0;
     let nextEnemyId = 1;
     let elapsedTime = 0;
     let fear = 8;
@@ -1399,7 +1400,11 @@ export const GameViewport3D = forwardRef<
                   ? "attackRun"
                   : "attack"
                 : actualSpeed > 0.12
-                  ? actualSpeed > 1.6
+                  ? // 1.73 rather than 1.6: updateAnimatedCharacter retimes the
+                    // clip by locomotionSpeed / referenceSpeed and clamps that
+                    // ratio to [0.65, 2.1], so the run clip cannot keep up below
+                    // 3.3 * 0.65 = 1.72 m/s and visibly skates if used there.
+                    actualSpeed > 1.73
                     ? "run"
                     : "walk"
                   : "idle";
@@ -1958,6 +1963,10 @@ export const GameViewport3D = forwardRef<
           current.onEncounterCleared();
         }
 
+        progressReportClock += delta;
+        const reportProgress = progressReportClock >= 0.12;
+        if (reportProgress) progressReportClock = 0;
+
         if (current.chapter === "survival") {
           survivalTime += delta;
           survivalReportClock += delta;
@@ -2035,7 +2044,12 @@ export const GameViewport3D = forwardRef<
             );
             encounterWasActive = true;
           }
-          current.onFuelProgress(fuelProgress);
+          // Throttled like every other reported value. The terminal value is
+          // always sent regardless of the clock, so the completion latch on the
+          // React side can never be skipped by a dropped report.
+          if (reportProgress || fuelProgress >= 0.999) {
+            current.onFuelProgress(fuelProgress);
+          }
         }
 
         if (current.chapter === "escape") {
@@ -2045,7 +2059,9 @@ export const GameViewport3D = forwardRef<
             0,
             1,
           );
-          current.onEscapeProgress(progress);
+          if (reportProgress || progress >= 0.985) {
+            current.onEscapeProgress(progress);
+          }
           escapeDirectorClock -= delta;
           if (
             progress < 0.93 &&

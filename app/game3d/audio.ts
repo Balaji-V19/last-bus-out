@@ -149,6 +149,14 @@ export class SurvivalAudio {
     gain.connect(output);
     oscillator.start(now);
     oscillator.stop(now + duration + 0.02);
+    // Web Audio keeps a stopped node's graph alive until it is disconnected.
+    // Without this every cue leaks an oscillator, a gain and a panner, which
+    // over a long session accumulates into thousands of live nodes.
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      gain.disconnect();
+      output.disconnect();
+    };
   }
 
   private noiseBurst(
@@ -185,6 +193,12 @@ export class SurvivalAudio {
     filter.connect(gain);
     gain.connect(output);
     source.start(now, Math.random() * 0.45, duration + 0.03);
+    source.onended = () => {
+      source.disconnect();
+      filter.disconnect();
+      gain.disconnect();
+      output.disconnect();
+    };
   }
 
   playTone(
