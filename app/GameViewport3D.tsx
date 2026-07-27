@@ -272,33 +272,29 @@ export const GameViewport3D = forwardRef<
 
     let disposed = false;
     const scene = new THREE.Scene();
-    const backgroundColors: Record<GameChapter, number> = {
-      hospital: 0x111916,
-      street: 0x121916,
-      station: 0x0b1110,
-      checkpoint: 0x101714,
-      depot: 0x080d0c,
-      escape: 0x111816,
-      survival: 0x090f0e,
+    // Fog is the horizon: it decides how far down a corridor the player can see
+    // before the world stops existing. The old values were a light grey-green
+    // haze at 0.019-0.025, which read as overcast daylight and let you take in a
+    // whole floor at a glance. These are darker and denser so sightlines die
+    // into black at roughly 18-26 m depending on the floor, and the torch beam
+    // becomes the thing that pushes that horizon back.
+    const atmosphere: Record<
+      GameChapter,
+      { background: number; fog: number; density: number; exposure: number }
+    > = {
+      hospital: { background: 0x080c0a, fog: 0x0d1512, density: 0.052, exposure: 1.22 },
+      street: { background: 0x080c0a, fog: 0x0c1311, density: 0.055, exposure: 1.2 },
+      station: { background: 0x040706, fog: 0x080c0b, density: 0.078, exposure: 1.3 },
+      checkpoint: { background: 0x060a09, fog: 0x0a100e, density: 0.062, exposure: 1.26 },
+      depot: { background: 0x030605, fog: 0x070b0a, density: 0.07, exposure: 1.3 },
+      escape: { background: 0x090d0b, fog: 0x0e1512, density: 0.048, exposure: 1.2 },
+      survival: { background: 0x040706, fog: 0x090e0c, density: 0.082, exposure: 1.32 },
     };
-    scene.background = new THREE.Color(backgroundColors[props.chapter]);
+    const chapterAtmosphere = atmosphere[props.chapter];
+    scene.background = new THREE.Color(chapterAtmosphere.background);
     scene.fog = new THREE.FogExp2(
-      props.chapter === "hospital"
-        ? 0x35433d
-        : props.chapter === "checkpoint"
-          ? 0x222c28
-          : props.chapter === "depot"
-            ? 0x18201d
-            : props.chapter === "survival"
-              ? 0x16221f
-              : 0x293832,
-      props.chapter === "hospital" || props.chapter === "depot"
-        ? 0.025
-        : props.chapter === "checkpoint"
-          ? 0.019
-          : props.chapter === "survival"
-            ? 0.024
-            : 0.02,
+      chapterAtmosphere.fog,
+      chapterAtmosphere.density,
     );
     const baseBackgroundColor = (
       scene.background as THREE.Color
@@ -323,8 +319,10 @@ export const GameViewport3D = forwardRef<
     );
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure =
-      props.chapter === "hospital" || props.chapter === "depot" ? 1.02 : 1.08;
+    // Raised alongside the ambient cut in scene.ts: with the interior sun gone
+    // the lit pools under each fitting need more exposure to stay readable,
+    // which widens the gap between lit and unlit rather than lifting everything.
+    renderer.toneMappingExposure = chapterAtmosphere.exposure;
     const baseToneMappingExposure = renderer.toneMappingExposure;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.BasicShadowMap;
@@ -395,13 +393,16 @@ export const GameViewport3D = forwardRef<
     const playerRoot = new THREE.Group();
     playerRoot.position.copy(world.start);
     scene.add(playerRoot);
+    // The torch is now the primary light source rather than a highlight on top
+    // of ambient, so it is brighter, reaches further, and has a softer edge to
+    // give the beam a readable falloff against the darker corridors.
     const flashlight = new THREE.SpotLight(
       0xeaf4dc,
-      6.8,
-      29,
-      Math.PI / 7.5,
-      0.42,
-      1.35,
+      11.5,
+      34,
+      Math.PI / 8,
+      0.55,
+      1.25,
     );
     flashlight.position.set(0.28, 1.46, -0.34);
     flashlight.castShadow = false;

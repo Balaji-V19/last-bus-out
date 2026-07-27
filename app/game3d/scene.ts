@@ -308,10 +308,15 @@ function addFluorescent(
   );
   panel.position.set(x, 4.53, z);
   parent.add(panel);
-  const light = new THREE.PointLight(0xdcebd2, intensity, 13, 2);
+  // With the interior sun removed these fittings are the only general light, so
+  // they carry more of the exposure than they used to. Reach is extended past
+  // the old 13 m because a pool of light that dies before the next fitting now
+  // reads as a gap in the ceiling rather than a dim corridor.
+  const lampIntensity = intensity * 2.35;
+  const light = new THREE.PointLight(0xdcebd2, lampIntensity, 17, 2);
   light.position.set(x, 4.2, z);
   light.castShadow = false;
-  light.userData.baseIntensity = intensity;
+  light.userData.baseIntensity = lampIntensity;
   light.userData.flicker = true;
   parent.add(light);
 }
@@ -835,33 +840,24 @@ function interactionObject(
   return { id, label, position: holder.position.clone(), object: holder };
 }
 
+// Every floor is a sealed interior, so there is no sun. The only ambient term
+// is a faint bounce that keeps unlit faces from crushing to pure black under
+// BasicShadowMap; the fluorescents and the player torch do the real lighting.
+// Keep these low. The blackout director scales them by globalPowerFactor, so a
+// bright ambient here is what previously made "blackouts" still show the floor.
+const FLOOR_AMBIENT: Record<GameChapter, { sky: number; ground: number; level: number }> = {
+  hospital: { sky: 0xb9c6bd, ground: 0x0f1614, level: 0.15 },
+  street: { sky: 0xb3c2b8, ground: 0x0e1513, level: 0.13 },
+  station: { sky: 0xc09a66, ground: 0x120d0a, level: 0.09 },
+  checkpoint: { sky: 0x9fb0a6, ground: 0x0c1210, level: 0.1 },
+  depot: { sky: 0x93a5ad, ground: 0x0a0f11, level: 0.08 },
+  escape: { sky: 0xbfc7b6, ground: 0x111612, level: 0.14 },
+  survival: { sky: 0x8fa3a6, ground: 0x0b100f, level: 0.07 },
+};
+
 function baseScene(root: THREE.Group, chapter: GameChapter) {
-  const hemiColors: Record<GameChapter, [number, number]> = {
-    hospital: [0xc8d1c5, 0x17201d],
-    street: [0xd6b882, 0x20231f],
-    station: [0xf0a56b, 0x241b17],
-    checkpoint: [0x8e9c91, 0x161b18],
-    depot: [0x7d8b83, 0x101513],
-    escape: [0xf0a17c, 0x211a1a],
-    survival: [0x819da0, 0x101916],
-  };
-  const [sky, ground] = hemiColors[chapter];
-  root.add(new THREE.HemisphereLight(sky, ground, chapter === "hospital" ? 1.45 : 2.1));
-  const sun = new THREE.DirectionalLight(
-    chapter === "hospital" ? 0xdde5d4 : 0xffc68b,
-    chapter === "hospital" ? 1.2 : 3.4,
-  );
-  sun.position.set(-16, 22, 12);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 100;
-  sun.shadow.camera.left = -35;
-  sun.shadow.camera.right = 35;
-  sun.shadow.camera.top = 35;
-  sun.shadow.camera.bottom = -35;
-  sun.shadow.bias = -0.0005;
-  root.add(sun);
+  const ambient = FLOOR_AMBIENT[chapter];
+  root.add(new THREE.HemisphereLight(ambient.sky, ambient.ground, ambient.level));
 }
 
 function buildHospital(materials: MaterialSet): BuiltWorld {
@@ -1420,7 +1416,7 @@ function buildHospitalWing(
   const root = new THREE.Group();
   const collisions: CollisionCircle[] = [];
   const interactions: InteractionPoint[] = [];
-  baseScene(root, "hospital");
+  baseScene(root, chapter);
 
   const floorConfig: Record<
     Exclude<GameChapter, "hospital">,
