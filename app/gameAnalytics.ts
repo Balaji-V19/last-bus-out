@@ -1,18 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameChapter } from "./game3d/scene";
 
 type AnalyticsValue = string | number | boolean;
 type AnalyticsData = Record<string, AnalyticsValue>;
 
-type UmamiTracker = {
-  track: (event: string, data?: AnalyticsData) => void;
-};
+type GoogleTagCommand = (...args: unknown[]) => void;
 
 declare global {
   interface Window {
-    umami?: UmamiTracker;
+    dataLayer?: unknown[];
+    gtag?: GoogleTagCommand;
   }
 }
 
@@ -35,6 +34,22 @@ export type GameplayAnalyticsSnapshot = {
   survivalWave: number;
 };
 
+export type GameplayAnalyticsEvent =
+  | "floor_entered"
+  | "game_over"
+  | "intro_skipped"
+  | "objective_completed"
+  | "orientation_completed"
+  | "story_completed";
+
+export type AnalyticsConsentState =
+  | "checking"
+  | "unavailable"
+  | "blocked"
+  | "pending"
+  | "denied"
+  | "granted";
+
 type SessionEntry = "new" | "continue" | "endless";
 
 type AnalyticsSession = {
@@ -50,16 +65,152 @@ const ACTIVE_MODES = new Set<GameplayAnalyticsMode>([
   "playing",
 ]);
 
+const ANALYTICS_META_NAME = "blackout-ga4-measurement-id";
+const CONSENT_STORAGE_KEY = "blackout-at-st-orison-analytics-consent-v1";
+const GOOGLE_TAG_SCRIPT_ID = "blackout-ga4-script";
+const MEASUREMENT_ID_PATTERN = /^G-[A-Z0-9]{6,20}$/;
+
+let measurementId: string | null = null;
+let consentState: AnalyticsConsentState = "unavailable";
+let configuredMeasurementId: string | null = null;
+
 function inputProfile() {
   if (typeof window === "undefined") return "unknown";
   if (window.matchMedia("(pointer: coarse)").matches) return "touch";
   return "keyboard-mouse";
 }
 
-function send(event: string, data: AnalyticsData) {
-  if (typeof window === "undefined") return;
+function browserRequestsNoTracking() {
+  if (typeof navigator === "undefined" || typeof window === "undefined") {
+    return false;
+  }
+  const privacyNavigator = navigator as Navigator & {
+    globalPrivacyControl?: boolean;
+  };
+  const privacyWindow = window as Window & { doNotTrack?: string };
+  return (
+    navigator.doNotTrack === "1" ||
+    privacyWindow.doNotTrack === "1" ||
+    privacyNavigator.globalPrivacyControl === true
+  );
+}
+
+function readMeasurementId() {
+  if (typeof document === "undefined") return null;
+  const configured = document
+    .querySelector<HTMLMetaElement>(`meta[name="${ANALYTICS_META_NAME}"]`)
+    ?.content.trim()
+    .toUpperCase();
+  return configured && MEASUREMENT_ID_PATTERN.test(configured)
+    ? configured
+    : null;
+}
+
+function savedConsent() {
   try {
-    window.umami?.track(event, data);
+    const stored = window.localStorage.getItem(CONSENT_STORAGE_KEY);
+    return stored === "granted" || stored === "denied" ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberConsent(choice: "granted" | "denied") {
+  try {
+    window.localStorage.setItem(CONSENT_STORAGE_KEY, choice);
+  } catch {
+    // Consent still applies to this page if storage is unavailable.
+  }
+}
+
+function consentDefaults(analyticsStorage: "denied" | "granted") {
+  return {
+    analytics_storage: analyticsStorage,
+    ad_storage: "denied",
+    ad_user_data: "denied",
+    ad_personalization: "denied",
+  };
+}
+
+function loadGoogleAnalytics(id: string) {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  if (configuredMeasurementId === id) {
+    window.gtag?.("consent", "update", consentDefaults("granted"));
+    return;
+  }
+
+  window.dataLayer ??= [];
+  window.gtag ??= function googleTagCommand() {
+    // Match Google's loader contract: gtag.js consumes the Arguments object.
+    // eslint-disable-next-line prefer-rest-params
+    window.dataLayer?.push(arguments);
+  };
+
+  // Basic Consent Mode: this code is reached only after permission. Queue the
+  // denied default before the granted update so every Google storage category
+  // has an explicit state, while all advertising features stay disabled.
+  window.gtag("consent", "default", consentDefaults("denied"));
+  window.gtag("consent", "update", consentDefaults("granted"));
+  window.gtag("js", new Date());
+  window.gtag("config", id, {
+    send_page_view: true,
+    allow_google_signals: false,
+    allow_ad_personalization_signals: false,
+  });
+
+  if (!document.getElementById(GOOGLE_TAG_SCRIPT_ID)) {
+    const script = document.createElement("script");
+    script.id = GOOGLE_TAG_SCRIPT_ID;
+    script.async = true;
+    script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(id)}`;
+    script.referrerPolicy = "strict-origin-when-cross-origin";
+    document.head.appendChild(script);
+  }
+  configuredMeasurementId = id;
+}
+
+function stopGoogleAnalytics() {
+  window.gtag?.("consent", "update", consentDefaults("denied"));
+}
+
+function initializeAnalytics(): AnalyticsConsentState {
+  measurementId = readMeasurementId();
+  if (!measurementId) {
+    consentState = "unavailable";
+    return consentState;
+  }
+  if (browserRequestsNoTracking()) {
+    consentState = "blocked";
+    return consentState;
+  }
+
+  consentState = savedConsent() ?? "pending";
+  if (consentState === "granted") loadGoogleAnalytics(measurementId);
+  return consentState;
+}
+
+function chooseConsent(choice: "granted" | "denied") {
+  measurementId ??= readMeasurementId();
+  if (!measurementId) {
+    consentState = "unavailable";
+    return consentState;
+  }
+  if (browserRequestsNoTracking()) {
+    consentState = "blocked";
+    return consentState;
+  }
+
+  rememberConsent(choice);
+  consentState = choice;
+  if (choice === "granted") loadGoogleAnalytics(measurementId);
+  else stopGoogleAnalytics();
+  return consentState;
+}
+
+function send(event: string, data: AnalyticsData) {
+  if (typeof window === "undefined" || consentState !== "granted") return;
+  try {
+    window.gtag?.("event", event, data);
   } catch {
     // Analytics must never interrupt the game if a tracker or network fails.
   }
@@ -67,10 +218,29 @@ function send(event: string, data: AnalyticsData) {
 
 export function useGameplayAnalytics(snapshot: GameplayAnalyticsSnapshot) {
   const snapshotRef = useRef(snapshot);
+  const [analyticsConsent, setAnalyticsConsentState] =
+    useState<AnalyticsConsentState>("checking");
 
   useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
+
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setAnalyticsConsentState(initializeAnalytics());
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const setAnalyticsConsent = useCallback(
+    (choice: "granted" | "denied") => {
+      setAnalyticsConsentState(chooseConsent(choice));
+    },
+    [],
+  );
 
   const sessionRef = useRef<AnalyticsSession>({
     started: false,
@@ -106,7 +276,7 @@ export function useGameplayAnalytics(snapshot: GameplayAnalyticsSnapshot) {
       kills: current.kills,
       survivors: current.survivors,
       survival_wave: current.survivalWave,
-      input: inputProfile(),
+      input_type: inputProfile(),
     };
   }, []);
 
@@ -115,7 +285,7 @@ export function useGameplayAnalytics(snapshot: GameplayAnalyticsSnapshot) {
       const session = sessionRef.current;
       if (!session.started) return;
       accrueActiveTime();
-      send("game-session-ended", { ...sessionData(), reason });
+      send("game_session_ended", { ...sessionData(), reason });
       session.started = false;
     },
     [accrueActiveTime, sessionData],
@@ -133,25 +303,28 @@ export function useGameplayAnalytics(snapshot: GameplayAnalyticsSnapshot) {
         activeSeconds: 0,
         entry,
       };
-      send("game-started", {
+      send("game_started", {
         entry,
         chapter,
         objective_step: step,
-        input: inputProfile(),
+        input_type: inputProfile(),
       });
     },
     [endSession],
   );
 
-  const track = useCallback((event: string, data: AnalyticsData = {}) => {
-    const current = snapshotRef.current;
-    send(event, {
-      chapter: current.chapter,
-      objective_step: current.step,
-      input: inputProfile(),
-      ...data,
-    });
-  }, []);
+  const track = useCallback(
+    (event: GameplayAnalyticsEvent, data: AnalyticsData = {}) => {
+      const current = snapshotRef.current;
+      send(event, {
+        chapter: current.chapter,
+        objective_step: current.step,
+        input_type: inputProfile(),
+        ...data,
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     const updateClock = () => {
@@ -178,9 +351,9 @@ export function useGameplayAnalytics(snapshot: GameplayAnalyticsSnapshot) {
         sessionRef.current.started &&
         sessionRef.current.activeSince !== null
       ) {
-        send("game-session-heartbeat", sessionData());
+        send("game_session_heartbeat", sessionData());
       }
-    }, 60_000);
+    }, 120_000);
     return () => window.clearInterval(heartbeat);
   }, [sessionData]);
 
@@ -188,7 +361,7 @@ export function useGameplayAnalytics(snapshot: GameplayAnalyticsSnapshot) {
     const recordExit = () => {
       if (!sessionRef.current.started) return;
       accrueActiveTime();
-      send("game-session-checkpoint", {
+      send("game_session_checkpoint", {
         ...sessionData(),
         reason: "page-exit",
       });
@@ -197,5 +370,11 @@ export function useGameplayAnalytics(snapshot: GameplayAnalyticsSnapshot) {
     return () => window.removeEventListener("pagehide", recordExit);
   }, [accrueActiveTime, sessionData]);
 
-  return { endSession, startSession, track };
+  return {
+    analyticsConsent,
+    endSession,
+    setAnalyticsConsent,
+    startSession,
+    track,
+  };
 }

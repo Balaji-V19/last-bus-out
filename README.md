@@ -270,45 +270,42 @@ agent session unless the repository owner explicitly requests it.
 
 ## Anonymous gameplay analytics
 
-Published Pages builds can use [Umami](https://umami.is/) for anonymous,
-cookieless analytics. The tracker is not included in local development or in a
-Pages build unless `UMAMI_WEBSITE_ID` is configured. Browser Do Not Track is
-respected, Core Web Vitals are enabled, and no player name, email address,
-save contents, precise movement, or free-form text is sent.
+Published Pages builds can use Google Analytics 4 after explicit player
+permission. The Pages workflow supplies the public measurement ID
+`G-9PT12LHSNJ`, but the game does not create or load the Google tag until the
+player selects **Allow analytics**. Declining, Do Not Track, or Global Privacy
+Control keeps analytics disabled. Local development and Pages builds without
+`GA_MEASUREMENT_ID` remain tracker-free.
+
+Advertising storage, personalization, Google Signals, User-ID, and session
+replay are disabled. No player name, email address, save contents, precise
+movement, pointer coordinates, or free-form text is sent.
 
 The game records a deliberately small event set:
 
 | Event | Purpose |
 | --- | --- |
-| `game-started` | New, continued, or endless runs |
-| `orientation-completed` | First-time control onboarding completion |
-| `floor-entered` | Campaign progression and floor drop-off |
-| `objective-completed` | Objective progression and blockers |
-| `game-over` | Health or infection failure points |
-| `story-completed` | Main-campaign completion |
-| `game-session-heartbeat` | One active-play sample per minute for playtime |
-| `game-session-ended` / `game-session-checkpoint` | Active seconds and final run state |
+| `game_started` | New, continued, or endless runs |
+| `orientation_completed` | First-time control onboarding completion |
+| `floor_entered` | Campaign progression and floor drop-off |
+| `objective_completed` | Objective progression and blockers |
+| `game_over` | Health or infection failure points |
+| `story_completed` | Main-campaign completion |
+| `game_session_heartbeat` | One active-play sample every two minutes |
+| `game_session_ended` / `game_session_checkpoint` | Active seconds and final run state |
 
-To enable it:
+The production workflow configures it with:
 
-1. Create an Umami Cloud website or self-host Umami.
-2. In the GitHub repository, open **Settings → Secrets and variables → Actions
-   → Variables**.
-3. Add `UMAMI_WEBSITE_ID` with the website UUID.
-4. Optionally add `UMAMI_SCRIPT_URL` for a self-hosted tracker. Without it, the
-   build uses `https://cloud.umami.is/script.js`.
-5. Optionally add `UMAMI_DOMAINS` with a comma-separated hostname allowlist,
-   such as `balaji-v19.github.io` or a future custom domain.
-6. Push normally to `main`; the Pages workflow injects the tracker at build
-   time. The website ID is a public client identifier, not a secret.
+```yaml
+GA_MEASUREMENT_ID: G-9PT12LHSNJ
+```
 
-Use Umami funnels to measure `game-started → orientation-completed →
-floor-entered → story-completed`. Use the heartbeat and session-ending event's
-`active_seconds` property for real playtime; this excludes time spent in a
-background tab or pause screen. Source posts should use distinct UTM links so
-their traffic and completion quality can be compared. See `ANALYTICS.md` for
-the complete setup and dashboard guide, and `PRIVACY.md` before changing
-providers or adding new data.
+Use GA4 Funnel explorations to measure `game_started → orientation_completed →
+floor_entered → story_completed`. Use `active_seconds` from checkpoint and
+ending events for real playtime; it excludes background tabs and pauses. Source
+posts should use distinct UTM links so traffic quality can be compared. See
+`ANALYTICS.md` for custom definitions, reports, property settings, and
+verification. Review `PRIVACY.md` before changing providers or collected data.
 
 ## Ownership and licensing
 

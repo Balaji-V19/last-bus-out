@@ -34,6 +34,7 @@ import {
   type EquipmentKind,
   type GameChapter,
 } from "./game3d/scene";
+import { INTRO_CARD_DURATION_SECONDS } from "./game3d/intro";
 
 type Inventory = Partial<Record<EquipmentKind, boolean>>;
 type TutorialAction = "look" | "move" | "run" | "dodge" | "perspective" | "interact";
@@ -50,6 +51,7 @@ type GameViewportProps = {
   ammo: number;
   inventory: Inventory;
   pov: PointOfView;
+  introStage: number;
   tutorialStage: number;
   /** Canvas the minimap draws into. Drawn to directly, never through state. */
   minimapCanvas: HTMLCanvasElement | null;
@@ -476,6 +478,13 @@ export const GameViewport3D = forwardRef<
       }
     });
     const flickerLightSet = new Set(flickerLights);
+    // A film camera would carry a restrained fill so an unpowered room still
+    // reads as a room. This light exists only for the opening and is kept out
+    // of the gameplay light budget, where darkness and the torch are mechanics.
+    const cinematicFill = new THREE.PointLight(0xcbd8cc, 7.2, 20, 1.65);
+    cinematicFill.visible = false;
+    cinematicFill.castShadow = false;
+    scene.add(cinematicFill);
 
     const playerRoot = new THREE.Group();
     playerRoot.position.copy(world.start);
@@ -499,6 +508,7 @@ export const GameViewport3D = forwardRef<
     playerRoot.add(flashlight, flashlightTarget);
     let hero: AnimatedCharacter | null = null;
     let introClock = 0;
+    let observedIntroStage = -1;
     // Every character model is fetched before the loading screen clears, not
     // just the hero. The infected body is the one the player meets first and
     // it was previously requested only when a zombie spawned, so on a cold
@@ -916,17 +926,20 @@ export const GameViewport3D = forwardRef<
     resizeObserver.observe(mount);
 
     const localLightPosition = new THREE.Vector3();
-    const updateLocalLightBudget = (delta: number) => {
+    const updateLocalLightBudget = (
+      delta: number,
+      focus = playerRoot.position,
+      lightBudget = 5,
+    ) => {
       localLightClock -= delta;
       if (localLightClock > 0) return;
       localLightClock = 0.45;
-      const lightBudget = 5;
       const nearestLights = localLights
         .map((light) => {
           light.getWorldPosition(localLightPosition);
           return {
             light,
-            distance: localLightPosition.distanceToSquared(playerRoot.position),
+            distance: localLightPosition.distanceToSquared(focus),
           };
         })
         .sort((a, b) => a.distance - b.distance)
@@ -1910,38 +1923,50 @@ export const GameViewport3D = forwardRef<
     };
 
     const updateIntroCamera = (delta: number) => {
+      const requestedStage = THREE.MathUtils.clamp(
+        Math.round(propsRef.current.introStage),
+        0,
+        4,
+      );
+      if (requestedStage !== observedIntroStage) {
+        observedIntroStage = requestedStage;
+        introClock = 0;
+        // The new shot may be in another room. Re-evaluate its practical
+        // lights immediately instead of waiting for the normal budget cadence.
+        localLightClock = 0;
+      }
       introClock += delta;
-      const shotLength = 2.9;
-      const shot = Math.min(4, Math.floor(introClock / shotLength));
-      const raw = (introClock % shotLength) / shotLength;
+      const shotLength = INTRO_CARD_DURATION_SECONDS;
+      const shot = requestedStage;
+      const raw = THREE.MathUtils.clamp(introClock / shotLength, 0, 1);
       const progress = raw * raw * (3 - 2 * raw);
       const drift = Math.sin(introClock * 0.55) * 0.08;
 
       if (shot === 0) {
         introCameraPosition.set(
-          introVestibule.x - 4.6 + progress * 1.8,
+          introVestibule.x - 1.8 + progress * 1.2,
           1.5 + drift,
-          introVestibule.z + 2.6 - progress * 3.1,
+          introVestibule.z + 3.8 - progress * 2.5,
         );
         introCameraTarget.set(
-          introVestibule.x,
+          introVestibule.x + 2.2,
           1.15,
-          introVestibule.z - 4.8,
+          introVestibule.z - 2.8,
         );
       } else if (shot === 1) {
         introCameraPosition.set(
-          introTriage.x + 4.7 - progress * 1.4,
+          introTriage.x - 1.8 + progress * 1.4,
           1.62 + drift,
-          introTriage.z + 3.8 - progress * 4.4,
+          introTriage.z + 4.8 - progress * 3,
         );
-        introCameraTarget.set(introTriage.x - 1.2, 1.1, introTriage.z - 2.8);
+        introCameraTarget.set(introTriage.x + 2.8, 1.1, introTriage.z - 4.5);
       } else if (shot === 2) {
         introCameraPosition.set(
-          introNurse.x - 3.4 + progress * 2.1,
+          introNurse.x - 4.4 + progress * 0.7,
           1.48 + drift,
-          introNurse.z + 2.6 - progress * 1.7,
+          introNurse.z - 2.5 + progress * 0.55,
         );
-        introCameraTarget.set(introNurse.x, 1.05, introNurse.z - 1.8);
+        introCameraTarget.set(introNurse.x + 0.3, 1.05, introNurse.z + 1.5);
       } else if (shot === 3) {
         introCameraPosition.set(
           introSouth.x + 3.8 - progress * 5.9,
@@ -1989,14 +2014,41 @@ export const GameViewport3D = forwardRef<
       lastFrameTime = timestamp;
       elapsedTime += delta;
       const time = elapsedTime;
-      updateLocalLightBudget(delta);
+      if (current.mode === "intro") updateIntroCamera(delta);
+      updateLocalLightBudget(
+        delta,
+        current.mode === "intro" ? camera.position : playerRoot.position,
+        current.mode === "intro" ? 9 : 5,
+      );
       syncWorldState(time, delta);
 
       if (current.mode === "intro") {
-        updateIntroCamera(delta);
+        // Gameplay darkness is intentional, but the introduction has to
+        // establish an actual hospital rather than present silhouettes. Let
+        // the camera carry a larger practical-light budget, reduce fog for the
+        // shot, and lift existing lights only while the cinematic is active.
+        sceneFog.density = chapterAtmosphere.density * 0.64;
+        renderer.toneMappingExposure = baseToneMappingExposure * 1.44;
+        cinematicFill.visible = true;
+        cinematicFill.position
+          .copy(camera.position)
+          .lerp(introCameraTarget, 0.28);
+        cinematicFill.position.y = Math.min(2.25, cinematicFill.position.y + 0.28);
+        for (const light of environmentLights) {
+          light.intensity = Number(light.userData.baseIntensity ?? 1) * 2.7;
+        }
+        for (const light of localLights) {
+          light.intensity = Number(light.userData.baseIntensity ?? 1) * 1.12;
+        }
+        for (const material of fixtureMaterials) {
+          material.emissiveIntensity =
+            Number(material.userData.baseEmissiveIntensity ?? 1) * 1.08;
+        }
         renderer.render(scene, camera);
         return;
       }
+      cinematicFill.visible = false;
+      sceneFog.density = chapterAtmosphere.density;
 
       if (interactiveMode) {
         if (

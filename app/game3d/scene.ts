@@ -1107,6 +1107,7 @@ function beginRoomGraphFloor(
     const plaque = textPanel(room.plaque, "#d7e0d4", "rgba(26,38,33,.94)");
     const centre = centreOf(room.id);
     plaque.position.set(centre.x, 2.28, centre.z + room.size[1] / 2 - 0.14);
+    plaque.rotation.y = Math.PI;
     plaque.scale.set(0.42, 0.34, 1);
     root.add(plaque);
   }
@@ -1314,6 +1315,7 @@ function buildHospital(materials: MaterialSet): BuiltWorld {
     const plaque = textPanel(room.plaque, "#d7e0d4", "rgba(26,38,33,.94)");
     const centre = centreOf(room.id);
     plaque.position.set(centre.x, 2.28, centre.z + sizeOf(room.id)[1] / 2 - 0.14);
+    plaque.rotation.y = Math.PI;
     plaque.scale.set(0.42, 0.34, 1);
     root.add(plaque);
   }

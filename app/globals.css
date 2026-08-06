@@ -680,7 +680,7 @@ button {
   pointer-events: none;
   background:
     linear-gradient(#020303 0 6.5vh, transparent 6.5vh calc(100% - 6.5vh), #020303 calc(100% - 6.5vh)),
-    radial-gradient(circle at 64% 48%, transparent 20%, rgba(0, 0, 0, 0.72) 100%);
+    radial-gradient(circle at 64% 48%, transparent 34%, rgba(0, 0, 0, 0.34) 100%);
 }
 
 .cinematic-intro::before {
@@ -688,17 +688,16 @@ button {
   position: absolute;
   inset: 6.5vh 0;
   background:
-    linear-gradient(105deg, rgba(0, 0, 0, 0.77), transparent 54%),
+    linear-gradient(105deg, rgba(0, 0, 0, 0.54), transparent 43%),
     repeating-linear-gradient(0deg, transparent 0 3px, rgba(255, 255, 255, 0.018) 4px);
-  mix-blend-mode: multiply;
-  animation: cinematic-exposure 2.9s steps(1, end) infinite;
+  animation: cinematic-exposure 7s steps(1, end) infinite;
 }
 
 .cinematic-shade {
   position: absolute;
   inset: 0;
-  box-shadow: inset 0 0 20vw 7vw rgba(0, 0, 0, 0.8);
-  background: linear-gradient(90deg, rgba(3, 5, 4, 0.62), transparent 72%);
+  box-shadow: inset 0 0 16vw 4vw rgba(0, 0, 0, 0.42);
+  background: linear-gradient(90deg, rgba(3, 5, 4, 0.48), transparent 58%);
 }
 
 .cinematic-copy {
@@ -707,7 +706,7 @@ button {
   bottom: clamp(82px, 14vh, 156px);
   width: min(600px, 78vw);
   text-shadow: 0 3px 18px #000;
-  animation: cinematic-copy-in 2.65s ease both;
+  animation: cinematic-copy-in 6.8s ease both;
 }
 
 .cinematic-copy small,
@@ -764,11 +763,19 @@ button {
   box-shadow: 0 0 10px rgba(240, 182, 60, 0.45);
 }
 
-.cinematic-skip {
+.cinematic-controls {
   position: absolute;
   right: clamp(18px, 4vw, 60px);
   bottom: calc(6.5vh + 14px);
   pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.cinematic-back,
+.cinematic-next,
+.cinematic-skip {
   padding: 8px 11px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(4, 7, 6, 0.72);
@@ -779,6 +786,20 @@ button {
   text-transform: uppercase;
 }
 
+.cinematic-next {
+  border-color: rgba(240, 182, 60, 0.52);
+  color: #fff;
+}
+
+.cinematic-back:disabled {
+  opacity: 0.34;
+  cursor: default;
+}
+
+.cinematic-back:not(:disabled):hover,
+.cinematic-back:not(:disabled):focus-visible,
+.cinematic-next:hover,
+.cinematic-next:focus-visible,
 .cinematic-skip:hover,
 .cinematic-skip:focus-visible {
   border-color: var(--signal);
@@ -1031,6 +1052,81 @@ button {
   font: 9px/1.45 monospace;
 }
 
+.analytics-consent {
+  max-width: 520px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(240, 182, 60, 0.25);
+  border-left: 3px solid var(--signal);
+  background: rgba(6, 10, 8, 0.78);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+}
+
+.analytics-consent strong {
+  display: block;
+  color: #e5e2d8;
+  font: 800 10px/1.2 monospace;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.analytics-consent p {
+  margin: 7px 0 9px;
+  color: #898e87;
+  font: 10px/1.45 monospace;
+}
+
+.analytics-consent-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analytics-allow,
+.analytics-decline,
+.analytics-preference {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(10, 15, 13, 0.82);
+  color: #c7cbc2;
+  cursor: pointer;
+  font: 700 9px/1 monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.analytics-allow {
+  border-color: rgba(240, 182, 60, 0.58);
+  color: var(--signal);
+}
+
+.analytics-consent-actions a {
+  color: #858c84;
+  font: 9px/1 monospace;
+  text-decoration-color: rgba(240, 182, 60, 0.35);
+  text-underline-offset: 3px;
+}
+
+.analytics-preference {
+  margin-top: 2px;
+  padding: 5px 8px;
+  color: #747a73;
+}
+
+.analytics-allow:hover,
+.analytics-allow:focus-visible,
+.analytics-decline:hover,
+.analytics-decline:focus-visible,
+.analytics-preference:hover,
+.analytics-preference:focus-visible,
+.analytics-consent-actions a:hover,
+.analytics-consent-actions a:focus-visible {
+  border-color: var(--signal);
+  color: #fff;
+  outline: none;
+}
+
 .pause-screen {
   background: rgba(4, 7, 6, 0.82);
   backdrop-filter: blur(8px);
@@ -1128,7 +1224,7 @@ button {
 
 @keyframes cinematic-copy-in {
   0% { opacity: 0; transform: translateY(13px); filter: blur(4px); }
-  13%, 78% { opacity: 1; transform: translateY(0); filter: blur(0); }
+  8%, 91% { opacity: 1; transform: translateY(0); filter: blur(0); }
   100% { opacity: 0; transform: translateY(-5px); filter: blur(1px); }
 }
 
@@ -1429,12 +1525,13 @@ button {
     left: 22px;
   }
 
-  .cinematic-skip {
+  .cinematic-controls {
     top: calc(6.5vh + 12px);
     right: 16px;
     bottom: auto;
-    max-width: 48vw;
-    line-height: 1.25;
+    max-width: 72vw;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .tutorial-card {
@@ -1503,7 +1600,9 @@ button {
   }
 
   .cinematic-copy p {
-    display: none;
+    display: block;
+    font-size: 11px;
+    line-height: 1.35;
   }
 
   .cinematic-progress {

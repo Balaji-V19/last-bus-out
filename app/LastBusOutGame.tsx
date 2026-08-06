@@ -16,6 +16,7 @@ import {
   type GameSoundOptions,
 } from "./game3d/audio";
 import type { EquipmentKind, GameChapter } from "./game3d/scene";
+import { INTRO_CARD_DURATION_MS } from "./game3d/intro";
 import type { PointOfView } from "./GameViewport3D";
 import { useGameplayAnalytics } from "./gameAnalytics";
 
@@ -307,7 +308,9 @@ export function LastBusOutGame() {
   const [inventoryOpen, setInventoryOpen] = useState(false);
 
   const {
+    analyticsConsent,
     endSession: endAnalyticsSession,
+    setAnalyticsConsent,
     startSession: startAnalyticsSession,
     track: trackAnalytics,
   } = useGameplayAnalytics({
@@ -405,7 +408,7 @@ export function LastBusOutGame() {
       setResetToken((value) => value + 1);
       setChapterCard((value) => value + 1);
       playSound("objective");
-      trackAnalytics("floor-entered", {
+      trackAnalytics("floor_entered", {
         chapter: nextChapter,
         objective_step: nextStep,
       });
@@ -423,7 +426,7 @@ export function LastBusOutGame() {
 
   const advanceStep = useCallback(
     (nextStep: number) => {
-      trackAnalytics("objective-completed", {
+      trackAnalytics("objective_completed", {
         chapter,
         completed_step: step,
         next_step: nextStep,
@@ -644,7 +647,7 @@ export function LastBusOutGame() {
       setHealth(next);
       setDamagePulse((value) => value + 1);
       if (next <= 0) {
-        trackAnalytics("game-over", {
+        trackAnalytics("game_over", {
           cause: "health",
           health: 0,
           infection: Math.round(infectionRef.current),
@@ -663,7 +666,7 @@ export function LastBusOutGame() {
       infectionRef.current = next;
       setInfection(next);
       if (next >= 100) {
-        trackAnalytics("game-over", {
+        trackAnalytics("game_over", {
           cause: "infection",
           health: Math.round(healthRef.current),
           infection: 100,
@@ -742,7 +745,7 @@ export function LastBusOutGame() {
       }
       if (value >= 0.985 && !escapeCompleteRef.current) {
         escapeCompleteRef.current = true;
-        trackAnalytics("story-completed", {
+        trackAnalytics("story_completed", {
           kills: killsRef.current,
           survivors,
           food,
@@ -828,7 +831,7 @@ export function LastBusOutGame() {
 
   const beginTutorial = useCallback((captureMouse = false) => {
     if (captureMouse) {
-      trackAnalytics("intro-skipped");
+      trackAnalytics("intro_skipped");
     }
     setIntroStage(INTRO_CARDS.length - 1);
     setTutorialStage(0);
@@ -838,23 +841,31 @@ export function LastBusOutGame() {
     }
   }, [trackAnalytics]);
 
+  const advanceIntro = useCallback(() => {
+    if (introStage >= INTRO_CARDS.length - 1) {
+      beginTutorial(false);
+      return;
+    }
+    const nextStage = introStage + 1;
+    const cue: GameSoundEvent = [
+      "metal-slam",
+      "radio-static",
+      "heartbeat",
+      "horror-sting",
+    ][nextStage - 1] as GameSoundEvent;
+    setIntroStage(nextStage);
+    playSound(cue, { intensity: nextStage === 4 ? 0.82 : 0.58 });
+  }, [beginTutorial, introStage, playSound]);
+
+  const rewindIntro = useCallback(() => {
+    setIntroStage((stage) => Math.max(0, stage - 1));
+  }, []);
+
   useEffect(() => {
     if (mode !== "intro" || !worldReady) return;
-    const cues: Array<[number, number, GameSoundEvent]> = [
-      [2800, 1, "metal-slam"],
-      [5700, 2, "radio-static"],
-      [8600, 3, "heartbeat"],
-      [11600, 4, "horror-sting"],
-    ];
-    const timers = cues.map(([delay, stageIndex, sound]) =>
-      window.setTimeout(() => {
-        setIntroStage(stageIndex);
-        playSound(sound, { intensity: stageIndex === 4 ? 0.82 : 0.58 });
-      }, delay),
-    );
-    timers.push(window.setTimeout(() => beginTutorial(false), 14800));
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [beginTutorial, mode, playSound, worldReady]);
+    const timer = window.setTimeout(advanceIntro, INTRO_CARD_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [advanceIntro, mode, worldReady]);
 
   const handleTutorialAction = useCallback(
     (action: TutorialAction) => {
@@ -862,7 +873,7 @@ export function LastBusOutGame() {
       if (!expected || expected.action !== action) return;
       playSound("objective");
       if (action === "interact") {
-        trackAnalytics("orientation-completed", {
+        trackAnalytics("orientation_completed", {
           steps_completed: TUTORIAL_STEPS.length,
         });
         setMode("playing");
@@ -1164,6 +1175,7 @@ export function LastBusOutGame() {
             ammo={ammo}
             inventory={inventory}
             pov={pov}
+            introStage={introStage}
             tutorialStage={tutorialStage}
             minimapCanvas={minimapCanvas}
             bloodCanvas={bloodCanvas}
@@ -1476,7 +1488,11 @@ export function LastBusOutGame() {
       {mode === "intro" && worldReady && introCard && (
         <section className="cinematic-intro" aria-label="Story introduction">
           <div className="cinematic-shade" aria-hidden="true" />
-          <div className="cinematic-copy" key={`intro-${introStage}`}>
+          <div
+            className="cinematic-copy"
+            key={`intro-${introStage}`}
+            aria-live="polite"
+          >
             <small>{introCard.eyebrow}</small>
             <h2>{introCard.title}</h2>
             <p>{introCard.body}</p>
@@ -1489,12 +1505,26 @@ export function LastBusOutGame() {
               />
             ))}
           </div>
-          <button
-            className="cinematic-skip"
-            onClick={() => beginTutorial(true)}
-          >
-            Skip cinematic · begin orientation
-          </button>
+          <div className="cinematic-controls">
+            <button
+              className="cinematic-back"
+              onClick={rewindIntro}
+              disabled={introStage === 0}
+            >
+              Previous
+            </button>
+            <button className="cinematic-next" onClick={advanceIntro}>
+              {introStage === INTRO_CARDS.length - 1
+                ? "Begin orientation"
+                : "Next scene"}
+            </button>
+            <button
+              className="cinematic-skip"
+              onClick={() => beginTutorial(true)}
+            >
+              Skip cinematic
+            </button>
+          </div>
         </section>
       )}
 
@@ -1586,9 +1616,70 @@ export function LastBusOutGame() {
               <span>Space · Dodge</span>
             </div>
             <p className="analytics-notice">
-              Published builds collect anonymous, cookieless gameplay metrics
-              to improve the hospital. Browser Do Not Track is respected.
+              {analyticsConsent === "checking"
+                ? "Checking the browser analytics preference…"
+                : analyticsConsent === "unavailable"
+                  ? "Analytics is inactive in this local or unconfigured build."
+                  : analyticsConsent === "blocked"
+                    ? "Analytics is disabled by the browser's privacy signal."
+                    : analyticsConsent === "pending"
+                      ? "Optional analytics is off until you choose to allow it."
+                      : analyticsConsent === "granted"
+                        ? "Anonymous gameplay analytics is enabled."
+                        : "Anonymous gameplay analytics is disabled."}
             </p>
+            {analyticsConsent === "pending" && (
+              <section
+                className="analytics-consent"
+                aria-label="Optional analytics preference"
+              >
+                <strong>Help improve St. Orison?</strong>
+                <p>
+                  Allow Google Analytics 4 to record anonymous visits, gameplay
+                  progress, device category, and active playtime. No names,
+                  save data, precise movement, advertising, or session replay.
+                </p>
+                <div className="analytics-consent-actions">
+                  <button
+                    type="button"
+                    className="analytics-allow"
+                    onClick={() => setAnalyticsConsent("granted")}
+                  >
+                    Allow analytics
+                  </button>
+                  <button
+                    type="button"
+                    className="analytics-decline"
+                    onClick={() => setAnalyticsConsent("denied")}
+                  >
+                    No thanks
+                  </button>
+                  <a
+                    href="https://github.com/Balaji-V19/blackout-at-st-orison/blob/main/PRIVACY.md"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Privacy details
+                  </a>
+                </div>
+              </section>
+            )}
+            {(analyticsConsent === "granted" ||
+              analyticsConsent === "denied") && (
+              <button
+                type="button"
+                className="analytics-preference"
+                onClick={() =>
+                  setAnalyticsConsent(
+                    analyticsConsent === "granted" ? "denied" : "granted",
+                  )
+                }
+              >
+                {analyticsConsent === "granted"
+                  ? "Turn analytics off"
+                  : "Allow analytics"}
+              </button>
+            )}
           </div>
         </section>
       )}
