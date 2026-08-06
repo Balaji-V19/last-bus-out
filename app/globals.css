@@ -669,6 +669,182 @@ button {
   animation: hint-fade 7s ease forwards;
 }
 
+/* The opening is filmed inside the live Three.js hospital. These overlays add
+   the typography, shot bars, and exposure changes of a cinematic without
+   hiding the actual spaces the player is about to explore. */
+.cinematic-intro {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    linear-gradient(#020303 0 6.5vh, transparent 6.5vh calc(100% - 6.5vh), #020303 calc(100% - 6.5vh)),
+    radial-gradient(circle at 64% 48%, transparent 20%, rgba(0, 0, 0, 0.72) 100%);
+}
+
+.cinematic-intro::before {
+  content: "";
+  position: absolute;
+  inset: 6.5vh 0;
+  background:
+    linear-gradient(105deg, rgba(0, 0, 0, 0.77), transparent 54%),
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(255, 255, 255, 0.018) 4px);
+  mix-blend-mode: multiply;
+  animation: cinematic-exposure 2.9s steps(1, end) infinite;
+}
+
+.cinematic-shade {
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 20vw 7vw rgba(0, 0, 0, 0.8);
+  background: linear-gradient(90deg, rgba(3, 5, 4, 0.62), transparent 72%);
+}
+
+.cinematic-copy {
+  position: absolute;
+  left: clamp(24px, 7vw, 110px);
+  bottom: clamp(82px, 14vh, 156px);
+  width: min(600px, 78vw);
+  text-shadow: 0 3px 18px #000;
+  animation: cinematic-copy-in 2.65s ease both;
+}
+
+.cinematic-copy small,
+.tutorial-card small {
+  display: block;
+  color: var(--signal);
+  font: 700 10px/1.3 monospace;
+  letter-spacing: 0.23em;
+  text-transform: uppercase;
+}
+
+.cinematic-copy h2 {
+  margin: 9px 0 10px;
+  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+  font-size: clamp(34px, 5.5vw, 74px);
+  font-weight: 900;
+  line-height: 0.93;
+  letter-spacing: -0.025em;
+  text-transform: uppercase;
+}
+
+.cinematic-copy p {
+  max-width: 470px;
+  margin: 0;
+  color: rgba(231, 232, 222, 0.82);
+  font-size: clamp(12px, 1.4vw, 16px);
+  line-height: 1.55;
+  letter-spacing: 0.035em;
+}
+
+.cinematic-progress,
+.tutorial-progress {
+  display: flex;
+  gap: 7px;
+}
+
+.cinematic-progress {
+  position: absolute;
+  left: clamp(24px, 7vw, 110px);
+  bottom: calc(6.5vh + 18px);
+}
+
+.cinematic-progress span,
+.tutorial-progress span {
+  width: 30px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.2);
+  transition: background 220ms ease, box-shadow 220ms ease;
+}
+
+.cinematic-progress span.active,
+.tutorial-progress span.active {
+  background: var(--signal);
+  box-shadow: 0 0 10px rgba(240, 182, 60, 0.45);
+}
+
+.cinematic-skip {
+  position: absolute;
+  right: clamp(18px, 4vw, 60px);
+  bottom: calc(6.5vh + 14px);
+  pointer-events: auto;
+  padding: 8px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(4, 7, 6, 0.72);
+  color: rgba(240, 239, 229, 0.75);
+  cursor: pointer;
+  font: 700 9px/1 monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.cinematic-skip:hover,
+.cinematic-skip:focus-visible {
+  border-color: var(--signal);
+  color: #fff;
+  outline: none;
+}
+
+/* The tutorial observes real camera and movement input; the panel never steals
+   those gestures. Its position deliberately leaves the interaction prompt and
+   mobile movement pads clear. */
+.tutorial-guide {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, transparent 48%, rgba(0, 0, 0, 0.38) 100%);
+}
+
+.tutorial-card {
+  position: absolute;
+  right: max(26px, env(safe-area-inset-right));
+  bottom: max(30px, env(safe-area-inset-bottom));
+  width: min(390px, calc(100vw - 52px));
+  padding: 20px 22px 17px;
+  border: 1px solid rgba(240, 182, 60, 0.38);
+  border-left: 3px solid var(--signal);
+  background:
+    linear-gradient(110deg, rgba(10, 15, 13, 0.97), rgba(7, 10, 9, 0.87)),
+    var(--panel);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.52);
+  animation: tutorial-card-in 320ms ease-out both;
+}
+
+.tutorial-card h2 {
+  margin: 6px 0 7px;
+  font-size: clamp(22px, 3vw, 32px);
+  line-height: 1;
+  letter-spacing: -0.025em;
+  text-transform: uppercase;
+}
+
+.tutorial-card p {
+  margin: 0;
+  color: rgba(222, 225, 214, 0.76);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tutorial-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 15px 0 16px;
+}
+
+.tutorial-keys kbd {
+  min-width: 28px;
+  padding: 6px 8px;
+  border: 1px solid rgba(240, 220, 159, 0.58);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--signal);
+  font: 700 10px/1 monospace;
+  text-align: center;
+  text-transform: uppercase;
+}
+
 .menu-screen,
 .pause-screen,
 .ending-screen,
@@ -848,9 +1024,23 @@ button {
   font: 9px/1.4 monospace;
 }
 
+.analytics-notice {
+  max-width: 480px;
+  margin-top: 14px;
+  color: #696e68;
+  font: 9px/1.45 monospace;
+}
+
 .pause-screen {
   background: rgba(4, 7, 6, 0.82);
   backdrop-filter: blur(8px);
+}
+
+.pause-screen,
+.ending-screen {
+  cursor: default;
+  overflow-y: auto;
+  touch-action: pan-y;
 }
 
 .pause-card {
@@ -926,10 +1116,30 @@ button {
   display: none;
 }
 
+.portrait-orientation {
+  display: none;
+}
+
 @keyframes chapter-reveal {
   0% { opacity: 0; transform: translateY(18px); }
   10%, 78% { opacity: 1; transform: translateY(0); }
   100% { opacity: 0; transform: translateY(-8px); }
+}
+
+@keyframes cinematic-copy-in {
+  0% { opacity: 0; transform: translateY(13px); filter: blur(4px); }
+  13%, 78% { opacity: 1; transform: translateY(0); filter: blur(0); }
+  100% { opacity: 0; transform: translateY(-5px); filter: blur(1px); }
+}
+
+@keyframes cinematic-exposure {
+  0%, 94%, 100% { opacity: 0.78; }
+  96% { opacity: 0.94; }
+}
+
+@keyframes tutorial-card-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 @keyframes toast-life {
@@ -968,91 +1178,175 @@ button {
   .mobile-controls {
     position: absolute;
     inset: 0;
+    z-index: 7;
     display: block;
     pointer-events: none;
   }
 
-  .move-pad {
+  /* The left side is a virtual stick with no permanent artwork. A short drag
+     walks; extending the same drag past 76 px runs. The untouched scene stays
+     visible instead of sitting behind a large direction pad. */
+  .touch-move-zone {
     position: absolute;
-    left: max(18px, env(safe-area-inset-left));
-    bottom: max(88px, env(safe-area-inset-bottom));
-    width: 132px;
-    height: 132px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 50%;
+    left: 0;
+    bottom: 0;
+    width: 54vw;
+    height: 68vh;
     pointer-events: auto;
+    touch-action: none;
   }
 
-  .move-button,
   .action-button {
     position: absolute;
-    border: 1px solid rgba(255, 255, 255, 0.24);
-    background: rgba(9, 13, 12, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    background: rgba(8, 12, 10, 0.38);
+    backdrop-filter: blur(3px);
     display: grid;
     place-items: center;
     touch-action: none;
   }
 
-  .move-button {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
+  .mobile-inventory-toggle {
+    position: absolute;
+    top: max(72px, calc(env(safe-area-inset-top) + 60px));
+    left: max(14px, env(safe-area-inset-left));
+    z-index: 10;
+    min-width: 92px;
+    height: 34px;
+    padding: 0 12px;
+    pointer-events: auto;
+    border: 1px solid rgba(240, 182, 60, 0.5);
+    background: rgba(7, 11, 9, 0.72);
+    color: var(--signal);
+    font: 800 8px/1 monospace;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
   }
-
-  .move-button.up { left: 45px; top: 5px; }
-  .move-button.down { left: 45px; bottom: 5px; }
-  .move-button.left { left: 5px; top: 45px; }
-  .move-button.right { right: 5px; top: 45px; }
 
   .action-cluster {
     position: absolute;
-    right: max(22px, env(safe-area-inset-right));
-    bottom: max(78px, env(safe-area-inset-bottom));
-    width: 150px;
-    height: 145px;
+    right: max(14px, env(safe-area-inset-right));
+    bottom: max(16px, env(safe-area-inset-bottom));
+    width: 108px;
+    height: 224px;
     pointer-events: auto;
   }
 
   .action-button {
-    width: 58px;
-    height: 58px;
+    width: 50px;
+    height: 50px;
     border-radius: 50%;
-    font-size: 8px;
+    font-size: 7px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 
-  .action-button.attack { right: 0; bottom: 20px; border-color: rgba(217, 88, 59, 0.7); }
-  .action-button.shoot { right: 2px; top: -25px; border-color: rgba(220, 190, 113, 0.76); }
-  .action-button.dodge { left: 27px; top: 0; }
-  .action-button.interact { left: 0; bottom: 0; border-color: rgba(240, 182, 60, 0.7); }
+  .action-button.attack { right: 0; bottom: 0; border-color: rgba(217, 88, 59, 0.78); }
+  .action-button.shoot { left: 0; bottom: 0; border-color: rgba(220, 190, 113, 0.76); }
+  .action-button.dodge { right: 0; bottom: 112px; }
+  .action-button.interact { right: 0; bottom: 56px; border-color: rgba(240, 182, 60, 0.72); }
+  .action-button.view {
+    right: 3px;
+    bottom: 168px;
+    width: 44px;
+    height: 44px;
+    border-color: rgba(139, 180, 171, 0.62);
+  }
 
   .prompt {
-    bottom: max(232px, env(safe-area-inset-bottom));
+    top: max(68px, calc(env(safe-area-inset-top) + 56px));
+    bottom: auto;
+    min-width: 150px;
+    padding: 7px 10px;
+    font-size: 9px;
   }
 
   .look-hint {
     display: none;
   }
 
+  .top-hud {
+    top: max(12px, env(safe-area-inset-top));
+    left: max(14px, env(safe-area-inset-left));
+    right: max(14px, env(safe-area-inset-right));
+    grid-template-columns: 1fr auto;
+  }
+
+  .brand-lockup {
+    display: none;
+  }
+
+  .objective {
+    justify-self: center;
+    width: min(330px, 50vw);
+  }
+
+  .minimap-frame {
+    top: max(58px, calc(env(safe-area-inset-top) + 48px));
+    right: max(14px, env(safe-area-inset-right));
+    width: 86px;
+    height: 86px;
+  }
+
+  .minimap {
+    width: 76px;
+    height: 76px;
+  }
+
   .status-stack {
-    bottom: max(228px, env(safe-area-inset-bottom));
-    width: min(220px, 48vw);
+    left: max(14px, env(safe-area-inset-left));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    width: min(150px, 30vw);
+  }
+
+  .status-stack .bar-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+    margin-top: 5px;
+  }
+
+  .status-stack .bar-row > span:first-child,
+  .status-stack .bar-row > span:last-child {
+    display: none;
+  }
+
+  .combat-readout,
+  .rescue-readout {
+    display: none;
   }
 
   .equipment-tray {
-    gap: 4px;
+    position: fixed;
+    top: max(112px, calc(env(safe-area-inset-top) + 100px));
+    left: max(14px, env(safe-area-inset-left));
+    z-index: 10;
+    display: none;
+    grid-template-columns: repeat(3, 44px);
+    gap: 7px;
+    width: auto;
+    max-height: calc(100dvh - 132px);
+    margin: 0;
+    padding: 10px;
+    overflow-y: auto;
+    pointer-events: auto;
+    border: 1px solid rgba(240, 182, 60, 0.38);
+    background: rgba(6, 10, 8, 0.93);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.62);
+  }
+
+  .equipment-tray.touch-open {
+    display: grid;
   }
 
   .equipment-slot {
-    width: 40px;
-    height: 48px;
+    width: 44px;
+    height: 51px;
   }
 
   .equipment-icon {
-    width: 34px;
-    height: 32px;
+    width: 38px;
+    height: 34px;
   }
 }
 
@@ -1124,6 +1418,31 @@ button {
   .run-stats strong {
     font-size: 20px;
   }
+
+  .cinematic-copy {
+    left: 22px;
+    bottom: 110px;
+    width: calc(100vw - 44px);
+  }
+
+  .cinematic-progress {
+    left: 22px;
+  }
+
+  .cinematic-skip {
+    top: calc(6.5vh + 12px);
+    right: 16px;
+    bottom: auto;
+    max-width: 48vw;
+    line-height: 1.25;
+  }
+
+  .tutorial-card {
+    right: 14px;
+    bottom: max(26px, env(safe-area-inset-bottom));
+    width: min(330px, calc(100vw - 28px));
+    padding: 16px 17px 14px;
+  }
 }
 
 @media (max-height: 520px) and (orientation: landscape) {
@@ -1158,6 +1477,10 @@ button {
     margin-top: 12px;
   }
 
+  .analytics-notice {
+    margin-top: 8px;
+  }
+
   .status-stack {
     bottom: 18px;
   }
@@ -1168,6 +1491,124 @@ button {
 
   .prompt {
     bottom: 18px;
+  }
+
+  .cinematic-copy {
+    bottom: 58px;
+    width: 58vw;
+  }
+
+  .cinematic-copy h2 {
+    font-size: 34px;
+  }
+
+  .cinematic-copy p {
+    display: none;
+  }
+
+  .cinematic-progress {
+    display: none;
+  }
+
+  .tutorial-card {
+    bottom: 14px;
+    width: min(360px, 46vw);
+    padding: 12px 14px 10px;
+  }
+
+  .tutorial-card p {
+    line-height: 1.3;
+  }
+
+  .tutorial-keys {
+    margin: 8px 0 9px;
+  }
+}
+
+@media (max-width: 600px) and (orientation: portrait),
+  (hover: none) and (orientation: portrait),
+  (pointer: coarse) and (orientation: portrait) {
+  .portrait-orientation {
+    position: absolute;
+    inset: 0;
+    z-index: 18;
+    display: grid;
+    grid-template-columns: 74px minmax(0, 330px);
+    place-content: center;
+    align-items: center;
+    gap: 24px;
+    padding: 28px;
+    overflow-y: auto;
+    touch-action: pan-y;
+    background:
+      radial-gradient(circle at 50% 40%, rgba(87, 46, 27, 0.36), transparent 30%),
+      rgba(4, 7, 6, 0.98);
+  }
+
+  .rotate-phone {
+    color: var(--signal);
+    font: 300 82px/1 sans-serif;
+    transform: rotate(90deg);
+    animation: rotate-device 1.8s ease-in-out infinite;
+  }
+
+  .portrait-orientation small {
+    color: var(--signal);
+    font: 700 9px/1.3 monospace;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+
+  .portrait-orientation h2 {
+    margin: 7px 0 8px;
+    font-size: clamp(28px, 9vw, 48px);
+    line-height: 0.95;
+    text-transform: uppercase;
+  }
+
+  .portrait-orientation p {
+    margin: 0 0 18px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .portrait-orientation .primary-button {
+    min-width: 180px;
+    height: 44px;
+  }
+}
+
+@keyframes rotate-device {
+  0%, 30%, 100% { transform: rotate(0deg); }
+  58%, 86% { transform: rotate(90deg); }
+}
+
+/* Touch controls occupy both bottom corners. Keep onboarding above them so the
+   player can see the instruction and operate both pads at the same time. */
+@media (hover: none), (pointer: coarse) {
+  .tutorial-card {
+    bottom: max(238px, calc(env(safe-area-inset-bottom) + 220px));
+  }
+}
+
+@media (hover: none) and (max-height: 520px) and (orientation: landscape),
+  (pointer: coarse) and (max-height: 520px) and (orientation: landscape) {
+  .tutorial-card {
+    top: max(66px, calc(env(safe-area-inset-top) + 54px));
+    right: auto;
+    bottom: auto;
+    left: max(14px, env(safe-area-inset-left));
+    width: min(300px, 38vw);
+  }
+
+  .tutorial-card p {
+    display: none;
+  }
+
+  .prompt {
+    top: max(66px, calc(env(safe-area-inset-top) + 54px));
+    bottom: auto;
   }
 }
 

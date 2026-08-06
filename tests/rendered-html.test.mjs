@@ -22,13 +22,13 @@ async function render() {
   );
 }
 
-test("server-renders the lightweight Last Bus Out launch menu", async () => {
+test("server-renders the lightweight Blackout at St. Orison launch menu", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Last Bus Out: St. Orison<\/title>/i);
+  assert.match(html, /<title>Blackout at St. Orison<\/title>/i);
   assert.match(html, /three-dimensional survival game/i);
   assert.match(html, /Enter St. Orison/);
   assert.match(html, /WASD/);

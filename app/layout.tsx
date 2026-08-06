@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Last Bus Out: St. Orison",
+  title: "Blackout at St. Orison",
   description:
     "A connected 3D hospital-horror game about rescuing survivors, suppressing an infection, and containing mutated patients across St. Orison's sealed floors.",
   openGraph: {
-    title: "Last Bus Out: St. Orison",
+    title: "Blackout at St. Orison",
     description:
       "Search a sealed hospital for survivors, food, medicine, and a safe room while the containment failure evolves around you.",
     type: "website",
@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Last Bus Out: St. Orison",
+    title: "Blackout at St. Orison",
     description: "Search. Rescue. Suppress the infection. Survive the hospital.",
     images: ["/og.png"],
   },

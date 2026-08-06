@@ -33,7 +33,7 @@ explicitly publishes its 3D models, rigs, and animations under CC0.
 
 The axe, pistol, materials, character equipment, hit response, animation-state
 mapping, model assembly, and performance LOD behavior are original code and
-geometry made for Last Bus Out. The earlier fully procedural characters remain
+geometry made for Blackout at St. Orison. The earlier fully procedural characters remain
 as an offline-safe fallback if a GLB cannot load.
 
 ## Audio
@@ -118,3 +118,11 @@ The background score is stored locally at
 - Source: https://opengameart.org/content/ambient-horror-track-01
 - License: CC0 1.0 Universal / public domain
 - License URL: https://creativecommons.org/publicdomain/zero/1.0/
+
+## Social preview
+
+`public/og.png` is an original AI-assisted composition created for Blackout at
+St. Orison on 2026-08-06. Its hospital key-art background was generated with
+OpenAI's image generator from a project-specific prompt; the 1280 × 640 crop,
+title, tagline, and color treatment were composed locally. No external image or
+commercial game artwork was incorporated.

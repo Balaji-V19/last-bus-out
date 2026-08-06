@@ -33,6 +33,10 @@ jobs:
 
       - name: Build the static game
         run: npm run build:pages
+        env:
+          UMAMI_WEBSITE_ID: ${{ vars.UMAMI_WEBSITE_ID }}
+          UMAMI_SCRIPT_URL: ${{ vars.UMAMI_SCRIPT_URL }}
+          UMAMI_DOMAINS: ${{ vars.UMAMI_DOMAINS }}
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

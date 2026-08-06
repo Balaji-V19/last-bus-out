@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import type { GameViewportHandle } from "./GameViewport3D";
 import {
   SurvivalAudio,
@@ -16,8 +17,92 @@ import {
 } from "./game3d/audio";
 import type { EquipmentKind, GameChapter } from "./game3d/scene";
 import type { PointOfView } from "./GameViewport3D";
+import { useGameplayAnalytics } from "./gameAnalytics";
 
-type Mode = "menu" | "playing" | "paused" | "ending";
+type Mode = "menu" | "intro" | "tutorial" | "playing" | "paused" | "ending";
+type TutorialAction = "look" | "move" | "run" | "dodge" | "perspective" | "interact";
+type TouchMoveKey = "w" | "a" | "s" | "d" | "shift";
+
+const TOUCH_MOVE_KEYS: TouchMoveKey[] = ["w", "a", "s", "d", "shift"];
+
+const INTRO_CARDS = [
+  {
+    eyebrow: "St. Orison Hospital · 05:42",
+    title: "The doors sealed four hours ago.",
+    body: "No evacuation order. No rescue team. Only the emergency lights stayed on.",
+  },
+  {
+    eyebrow: "Containment failure",
+    title: "Some patients never left.",
+    body: "The infection changes movement, memory, and hunger. The upper floors made it worse.",
+  },
+  {
+    eyebrow: "Emergency frequency 9",
+    title: "Living people are still inside.",
+    body: "Find them. Restore the hospital. Bring food and medicine to Shelter 04.",
+  },
+  {
+    eyebrow: "Blood screening · Positive",
+    title: "You are running out of time.",
+    body: "Antivirals can slow the infection. Nothing in St. Orison can cure it.",
+  },
+  {
+    eyebrow: "Ground Floor Emergency",
+    title: "Wake up. Keep moving.",
+    body: "Learn the building before the building learns you.",
+  },
+] as const;
+
+const TUTORIAL_STEPS: Array<{
+  action: TutorialAction;
+  label: string;
+  title: string;
+  instruction: string;
+  keys: string[];
+}> = [
+  {
+    action: "look",
+    label: "Orientation 1 / 6",
+    title: "Look around",
+    instruction: "Click inside the hospital, then move the mouse. On touch screens, drag the view.",
+    keys: ["Mouse"],
+  },
+  {
+    action: "move",
+    label: "Orientation 2 / 6",
+    title: "Walk the receiving room",
+    instruction: "Use the movement keys, or drag on the left side of a touch screen, and cover a few metres.",
+    keys: ["W", "A", "S", "D"],
+  },
+  {
+    action: "run",
+    label: "Orientation 3 / 6",
+    title: "Run when you must",
+    instruction: "Hold Shift while moving, or drag farther on the left side. Running is faster, louder, and consumes stamina.",
+    keys: ["Shift / long drag", "W"],
+  },
+  {
+    action: "dodge",
+    label: "Orientation 4 / 6",
+    title: "Break away",
+    instruction: "Press Space or tap Evade to lunge clear of an attack. It costs stamina, so use it deliberately.",
+    keys: ["Space / Evade"],
+  },
+  {
+    action: "perspective",
+    label: "Orientation 5 / 6",
+    title: "Choose your view",
+    instruction: "Press V or the View control to switch between first and third person at any time.",
+    keys: ["V / View"],
+  },
+  {
+    action: "interact",
+    label: "Orientation 6 / 6",
+    title: "Find a working light",
+    instruction: "Follow the amber marker to the torch and interact. Taking it begins the real investigation.",
+    keys: ["E"],
+  },
+];
 
 const loadGameViewport = () => import("./GameViewport3D");
 const GameViewport3D = lazy(async () => {
@@ -45,6 +130,8 @@ const SAVE_KEY = "last-bus-out-st-orison-save-v3";
 // Point of view is a display preference rather than campaign state, so it is
 // stored separately and survives starting a new run or clearing a save.
 const POV_KEY = "last-bus-out-pov";
+// The two storage keys intentionally retain the pre-rebrand prefix so returning
+// players on the same origin keep their campaign and camera preference.
 
 const CHAPTERS: Record<
   GameChapter,
@@ -166,6 +253,14 @@ export function LastBusOutGame() {
   const escapeCompleteRef = useRef(false);
   const escapeScoutRef = useRef(false);
   const toastTimerRef = useRef<number | null>(null);
+  const touchMoveRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const touchMoveStateRef = useRef<Record<TouchMoveKey, boolean>>({
+    w: false,
+    a: false,
+    s: false,
+    d: false,
+    shift: false,
+  });
 
   const [mode, setMode] = useState<Mode>("menu");
   const [chapter, setChapter] = useState<GameChapter>("hospital");
@@ -202,11 +297,29 @@ export function LastBusOutGame() {
   const [survivalTime, setSurvivalTime] = useState(0);
   const [survivalRemaining, setSurvivalRemaining] = useState(0);
   const [dread, setDread] = useState(8);
+  const [introStage, setIntroStage] = useState(0);
+  const [tutorialStage, setTutorialStage] = useState(0);
   const [chapterCard, setChapterCard] = useState(0);
   const [hasSave, setHasSave] = useState(false);
   const [resetToken, setResetToken] = useState(0);
   const [damagePulse, setDamagePulse] = useState(0);
   const [worldReady, setWorldReady] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
+
+  const {
+    endSession: endAnalyticsSession,
+    startSession: startAnalyticsSession,
+    track: trackAnalytics,
+  } = useGameplayAnalytics({
+    mode,
+    chapter,
+    step,
+    health,
+    infection,
+    kills,
+    survivors,
+    survivalWave,
+  });
 
   const playSound = useCallback(
     (event: GameSoundEvent, options?: GameSoundOptions) => {
@@ -292,6 +405,10 @@ export function LastBusOutGame() {
       setResetToken((value) => value + 1);
       setChapterCard((value) => value + 1);
       playSound("objective");
+      trackAnalytics("floor-entered", {
+        chapter: nextChapter,
+        objective_step: nextStep,
+      });
       // Changing floor is progress, not an interruption. The player gets the
       // floor card and a note that the run is saved, and walks straight on —
       // there is no confirmation to dismiss.
@@ -301,16 +418,21 @@ export function LastBusOutGame() {
       // silently drop to a dead mouse after a transition.
       window.setTimeout(() => viewportRef.current?.captureLook(), 60);
     },
-    [playSound, saveGame, showToast],
+    [playSound, saveGame, showToast, trackAnalytics],
   );
 
   const advanceStep = useCallback(
     (nextStep: number) => {
+      trackAnalytics("objective-completed", {
+        chapter,
+        completed_step: step,
+        next_step: nextStep,
+      });
       setStep(nextStep);
       saveGame(chapter, nextStep);
       playSound("objective");
     },
-    [chapter, playSound, saveGame],
+    [chapter, playSound, saveGame, step, trackAnalytics],
   );
 
   const resetRun = useCallback(() => {
@@ -332,7 +454,10 @@ export function LastBusOutGame() {
     setHasPistol(false);
     setCombatCombo(0);
     setCombatScore(0);
-    setMode("playing");
+    setInventoryOpen(false);
+    setMode("intro");
+    setIntroStage(0);
+    setTutorialStage(0);
     setHasSave(true);
     setChapter("hospital");
     setStep(0);
@@ -348,8 +473,9 @@ export function LastBusOutGame() {
     powerCompleteRef.current = false;
     escapeCompleteRef.current = false;
     escapeScoutRef.current = false;
+    startAnalyticsSession("new", "hospital", 0);
     playSound("objective");
-  }, [playSound, setMode]);
+  }, [playSound, setMode, startAnalyticsSession]);
 
   const continueRun = useCallback(() => {
     setWorldReady(false);
@@ -375,6 +501,7 @@ export function LastBusOutGame() {
     setHasPistol(saved.hasPistol ?? (saved.ammo ?? 0) > 0);
     setCombatCombo(0);
     setCombatScore(0);
+    setInventoryOpen(false);
     setMode("playing");
     setChapter(saved.chapter);
     setStep(saved.step);
@@ -385,8 +512,9 @@ export function LastBusOutGame() {
     setSurvivalRemaining(0);
     setDread(8);
     escapeScoutRef.current = saved.chapter === "escape" && saved.step > 0;
+    startAnalyticsSession("continue", saved.chapter, saved.step);
     playSound("objective");
-  }, [playSound, resetRun, setMode]);
+  }, [playSound, resetRun, setMode, startAnalyticsSession]);
 
   const healWithMedicine = useCallback(() => {
     if (medicine <= 0 || healthRef.current >= 100) return;
@@ -516,11 +644,17 @@ export function LastBusOutGame() {
       setHealth(next);
       setDamagePulse((value) => value + 1);
       if (next <= 0) {
+        trackAnalytics("game-over", {
+          cause: "health",
+          health: 0,
+          infection: Math.round(infectionRef.current),
+          kills: killsRef.current,
+        });
         setMode("paused");
         showToast("You collapsed · press 1 for a trauma kit, or restart");
       }
     },
-    [setMode, showToast],
+    [setMode, showToast, trackAnalytics],
   );
 
   const handleInfection = useCallback(
@@ -529,13 +663,19 @@ export function LastBusOutGame() {
       infectionRef.current = next;
       setInfection(next);
       if (next >= 100) {
+        trackAnalytics("game-over", {
+          cause: "infection",
+          health: Math.round(healthRef.current),
+          infection: 100,
+          kills: killsRef.current,
+        });
         setMode("paused");
         showToast("The infection took over · restart from the emergency floor");
       } else if (next >= 72 && infectionRef.current - amount < 72) {
         showToast("Critical infection · press 2 to inject an antiviral");
       }
     },
-    [showToast],
+    [showToast, trackAnalytics],
   );
 
   const handleKill = useCallback(() => {
@@ -602,12 +742,30 @@ export function LastBusOutGame() {
       }
       if (value >= 0.985 && !escapeCompleteRef.current) {
         escapeCompleteRef.current = true;
+        trackAnalytics("story-completed", {
+          kills: killsRef.current,
+          survivors,
+          food,
+          infection: Math.round(infectionRef.current),
+        });
+        endAnalyticsSession("story-completed");
         setMode("ending");
         window.localStorage.removeItem(SAVE_KEY);
         setHasSave(false);
       }
     },
-    [advanceStep, chapter, setHasSave, setMode, showToast, step],
+    [
+      advanceStep,
+      chapter,
+      endAnalyticsSession,
+      food,
+      setHasSave,
+      setMode,
+      showToast,
+      step,
+      survivors,
+      trackAnalytics,
+    ],
   );
 
   const handleSurvivalProgress = useCallback(
@@ -627,6 +785,7 @@ export function LastBusOutGame() {
     setStamina(100);
     setMedicine((value) => Math.max(1, value));
     setPower(100);
+    startAnalyticsSession("endless", "survival", 0);
     setMode("playing");
     loadChapter("survival");
     window.setTimeout(
@@ -639,7 +798,7 @@ export function LastBusOutGame() {
         }),
       0,
     );
-  }, [loadChapter, medicine, saveGame]);
+  }, [loadChapter, medicine, saveGame, startAnalyticsSession]);
 
   // Duck the score as something closes. Fully out of the way by four metres so
   // that at the moment it matters the player is hearing the creature and
@@ -667,6 +826,55 @@ export function LastBusOutGame() {
     showToast(wave > 0 ? `Containment failing · wave ${wave}` : "Movement ahead");
   }, [showToast]);
 
+  const beginTutorial = useCallback((captureMouse = false) => {
+    if (captureMouse) {
+      trackAnalytics("intro-skipped");
+    }
+    setIntroStage(INTRO_CARDS.length - 1);
+    setTutorialStage(0);
+    setMode("tutorial");
+    if (captureMouse) {
+      window.setTimeout(() => viewportRef.current?.captureLook(), 0);
+    }
+  }, [trackAnalytics]);
+
+  useEffect(() => {
+    if (mode !== "intro" || !worldReady) return;
+    const cues: Array<[number, number, GameSoundEvent]> = [
+      [2800, 1, "metal-slam"],
+      [5700, 2, "radio-static"],
+      [8600, 3, "heartbeat"],
+      [11600, 4, "horror-sting"],
+    ];
+    const timers = cues.map(([delay, stageIndex, sound]) =>
+      window.setTimeout(() => {
+        setIntroStage(stageIndex);
+        playSound(sound, { intensity: stageIndex === 4 ? 0.82 : 0.58 });
+      }, delay),
+    );
+    timers.push(window.setTimeout(() => beginTutorial(false), 14800));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [beginTutorial, mode, playSound, worldReady]);
+
+  const handleTutorialAction = useCallback(
+    (action: TutorialAction) => {
+      const expected = TUTORIAL_STEPS[tutorialStage];
+      if (!expected || expected.action !== action) return;
+      playSound("objective");
+      if (action === "interact") {
+        trackAnalytics("orientation-completed", {
+          steps_completed: TUTORIAL_STEPS.length,
+        });
+        setMode("playing");
+        setChapterCard((value) => value + 1);
+        showToast("Orientation complete · the investigation has begun");
+        return;
+      }
+      setTutorialStage((value) => Math.min(TUTORIAL_STEPS.length - 1, value + 1));
+    },
+    [playSound, showToast, trackAnalytics, tutorialStage],
+  );
+
   // Resuming has to re-acquire pointer lock, and pointer lock can only be
   // requested from a user gesture. Both the pause button and the Escape key
   // qualify; Chrome additionally throttles re-locking for about a second after
@@ -680,6 +888,10 @@ export function LastBusOutGame() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (mode === "intro") {
+          beginTutorial(true);
+          return;
+        }
         if (mode === "playing") setMode("paused");
         else if (mode === "paused") resumePlay();
         return;
@@ -692,7 +904,15 @@ export function LastBusOutGame() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [healWithMedicine, mode, resumePlay, injectAntiviral]);
+  }, [beginTutorial, healWithMedicine, mode, resumePlay, injectAntiviral]);
+
+  // Pointer lock hides the system cursor. Any modal game state must release it
+  // before its buttons appear; otherwise a player killed in first person sees
+  // the restart menu but cannot point at any of its actions.
+  useEffect(() => {
+    if (mode === "playing" || mode === "tutorial") return;
+    viewportRef.current?.releaseLook();
+  }, [mode]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setHasSave(Boolean(getSave())), 0);
@@ -838,23 +1058,100 @@ export function LastBusOutGame() {
   const objective =
     OBJECTIVES[chapter][clamp(step, 0, OBJECTIVES[chapter].length - 1)];
   const chapterInfo = CHAPTERS[chapter];
+  const introCard = INTRO_CARDS[clamp(introStage, 0, INTRO_CARDS.length - 1)];
+  const tutorial =
+    TUTORIAL_STEPS[clamp(tutorialStage, 0, TUTORIAL_STEPS.length - 1)];
 
   const setViewportMove = useCallback(
-    (key: "w" | "a" | "s" | "d", active: boolean) => {
+    (key: "w" | "a" | "s" | "d" | "shift", active: boolean) => {
       viewportRef.current?.setMove(key, active);
     },
     [],
   );
 
-  const moveButton = (key: "w" | "a" | "s" | "d") => ({
-    onPointerDown: () => setViewportMove(key, true),
-    onPointerUp: () => setViewportMove(key, false),
-    onPointerCancel: () => setViewportMove(key, false),
-    onPointerLeave: () => setViewportMove(key, false),
-  });
+  const applyTouchMovement = useCallback(
+    (next: Record<TouchMoveKey, boolean>) => {
+      for (const key of TOUCH_MOVE_KEYS) {
+        if (touchMoveStateRef.current[key] === next[key]) continue;
+        touchMoveStateRef.current[key] = next[key];
+        setViewportMove(key, next[key]);
+      }
+    },
+    [setViewportMove],
+  );
+
+  const releaseTouchMovement = useCallback(() => {
+    touchMoveRef.current = null;
+    applyTouchMovement({ w: false, a: false, s: false, d: false, shift: false });
+  }, [applyTouchMovement]);
+
+  const handleTouchMoveStart = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      touchMoveRef.current = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+      };
+      applyTouchMovement({ w: false, a: false, s: false, d: false, shift: false });
+    },
+    [applyTouchMovement],
+  );
+
+  const handleTouchMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const origin = touchMoveRef.current;
+      if (!origin || origin.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      const dx = event.clientX - origin.x;
+      const dy = event.clientY - origin.y;
+      const deadZone = 16;
+      const distance = Math.hypot(dx, dy);
+      applyTouchMovement({
+        w: dy < -deadZone,
+        s: dy > deadZone,
+        a: dx < -deadZone,
+        d: dx > deadZone,
+        shift: distance > 76,
+      });
+    },
+    [applyTouchMovement],
+  );
+
+  const requestLandscape = useCallback(async () => {
+    if (
+      typeof window === "undefined" ||
+      !window.matchMedia("(pointer: coarse)").matches ||
+      !window.matchMedia("(orientation: portrait)").matches
+    ) {
+      return;
+    }
+    try {
+      if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch {
+      // iOS browsers do not expose element fullscreen; rotation still works.
+    }
+    try {
+      const orientation = window.screen.orientation as ScreenOrientation & {
+        lock?: (orientation: "landscape") => Promise<void>;
+      };
+      await orientation.lock?.("landscape");
+    } catch {
+      // Safari requires the player to rotate the phone manually.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "playing" && mode !== "tutorial") {
+      releaseTouchMovement();
+    }
+  }, [mode, releaseTouchMovement]);
 
   return (
-    <main className="game-shell" aria-label="Last Bus Out three-dimensional survival game">
+    <main className="game-shell" aria-label="Blackout at St. Orison three-dimensional survival-horror game">
       {mode !== "menu" && (
         <Suspense fallback={null}>
           <GameViewport3D
@@ -867,6 +1164,7 @@ export function LastBusOutGame() {
             ammo={ammo}
             inventory={inventory}
             pov={pov}
+            tutorialStage={tutorialStage}
             minimapCanvas={minimapCanvas}
             bloodCanvas={bloodCanvas}
             resetToken={resetToken}
@@ -892,6 +1190,7 @@ export function LastBusOutGame() {
             onWaveWarning={handleWaveWarning}
             onThreatProximity={handleThreatProximity}
             onAimChange={setAiming}
+            onTutorialAction={handleTutorialAction}
             onSound={playSound}
           />
         </Suspense>
@@ -918,13 +1217,13 @@ export function LastBusOutGame() {
         </div>
       )}
 
-      {mode !== "menu" && mode !== "ending" && (
+      {mode !== "menu" && mode !== "ending" && mode !== "intro" && (
         <>
           <div className="top-hud">
             <div className="brand-lockup">
               <span className="route-mark" />
               <span>
-                <strong>Last Bus Out</strong>
+                <strong>Blackout at St. Orison</strong>
                 <small>{chapterInfo.location} · Hospital containment</small>
               </span>
             </div>
@@ -940,13 +1239,15 @@ export function LastBusOutGame() {
               >
                 {soundOn ? "◖))" : "◖×"}
               </button>
-              <button
-                className="icon-button"
-                aria-label="Pause game"
-                onClick={() => setMode("paused")}
-              >
-                Ⅱ
-              </button>
+              {mode === "playing" && (
+                <button
+                  className="icon-button"
+                  aria-label="Pause game"
+                  onClick={() => setMode("paused")}
+                >
+                  Ⅱ
+                </button>
+              )}
             </div>
           </div>
 
@@ -995,7 +1296,10 @@ export function LastBusOutGame() {
               </strong>
               <small>{combatScore.toLocaleString()} pts</small>
             </div>
-            <div className="equipment-tray" aria-label="Physical equipment carried by the character">
+            <div
+              className={`equipment-tray ${inventoryOpen ? "touch-open" : ""}`}
+              aria-label="Physical equipment carried by the character"
+            >
               {inventory.axe && (
                 <div className="equipment-slot selected" title="Fire axe · press F to swing">
                   <span className="equipment-icon item-axe" aria-hidden="true" />
@@ -1018,7 +1322,10 @@ export function LastBusOutGame() {
               {inventory.medkit && (
                 <button
                   className="equipment-slot actionable"
-                  onClick={healWithMedicine}
+                  onClick={() => {
+                    healWithMedicine();
+                    setInventoryOpen(false);
+                  }}
                   title="Trauma kit · press 1 to use"
                 >
                   <span className="equipment-icon item-medkit" aria-hidden="true" />
@@ -1029,7 +1336,10 @@ export function LastBusOutGame() {
               {antivirals > 0 && (
                 <button
                   className="equipment-slot actionable antiviral-slot"
-                  onClick={injectAntiviral}
+                  onClick={() => {
+                    injectAntiviral();
+                    setInventoryOpen(false);
+                  }}
                   title="Antiviral dose · press 2 to inject"
                 >
                   <span className="equipment-icon item-antiviral" aria-hidden="true" />
@@ -1123,16 +1433,33 @@ export function LastBusOutGame() {
           )}
 
           <div className="mobile-controls" aria-label="Touch controls">
-            <div className="move-pad">
-              <button className="move-button up" aria-label="Move forward" {...moveButton("w")}>▲</button>
-              <button className="move-button down" aria-label="Move backward" {...moveButton("s")}>▼</button>
-              <button className="move-button left" aria-label="Move left" {...moveButton("a")}>◀</button>
-              <button className="move-button right" aria-label="Move right" {...moveButton("d")}>▶</button>
-            </div>
+            <div
+              className="touch-move-zone"
+              aria-label="Drag up, down, left, or right to move. Drag farther to run."
+              onPointerDown={handleTouchMoveStart}
+              onPointerMove={handleTouchMove}
+              onPointerUp={releaseTouchMovement}
+              onPointerCancel={releaseTouchMovement}
+              onLostPointerCapture={releaseTouchMovement}
+            />
+            <button
+              className="mobile-inventory-toggle"
+              aria-expanded={inventoryOpen}
+              onClick={() => setInventoryOpen((value) => !value)}
+            >
+              {inventoryOpen ? "Close pack" : "Open pack"}
+            </button>
             <div className="action-cluster">
-              <button className="action-button dodge" onClick={() => viewportRef.current?.dodge()}>Dodge</button>
+              <button className="action-button dodge" onClick={() => viewportRef.current?.dodge()}>Evade</button>
               <button className="action-button interact" onClick={() => viewportRef.current?.interact()}>Use</button>
               <button className="action-button attack" onClick={() => viewportRef.current?.attack()}>Attack</button>
+              <button
+                className="action-button view"
+                aria-label="Change perspective"
+                onClick={() => viewportRef.current?.togglePerspective()}
+              >
+                View
+              </button>
               {inventory.pistol && (
                 <button
                   className="action-button shoot"
@@ -1144,6 +1471,54 @@ export function LastBusOutGame() {
             </div>
           </div>
         </>
+      )}
+
+      {mode === "intro" && worldReady && introCard && (
+        <section className="cinematic-intro" aria-label="Story introduction">
+          <div className="cinematic-shade" aria-hidden="true" />
+          <div className="cinematic-copy" key={`intro-${introStage}`}>
+            <small>{introCard.eyebrow}</small>
+            <h2>{introCard.title}</h2>
+            <p>{introCard.body}</p>
+          </div>
+          <div className="cinematic-progress" aria-hidden="true">
+            {INTRO_CARDS.map((card, index) => (
+              <span
+                key={card.title}
+                className={index <= introStage ? "active" : ""}
+              />
+            ))}
+          </div>
+          <button
+            className="cinematic-skip"
+            onClick={() => beginTutorial(true)}
+          >
+            Skip cinematic · begin orientation
+          </button>
+        </section>
+      )}
+
+      {mode === "tutorial" && tutorial && (
+        <section className="tutorial-guide" aria-live="polite">
+          <div className="tutorial-card" key={`tutorial-${tutorialStage}`}>
+            <small>{tutorial.label}</small>
+            <h2>{tutorial.title}</h2>
+            <p>{tutorial.instruction}</p>
+            <div className="tutorial-keys" aria-label="Required controls">
+              {tutorial.keys.map((key) => (
+                <kbd key={key}>{key}</kbd>
+              ))}
+            </div>
+            <div className="tutorial-progress" aria-hidden="true">
+              {TUTORIAL_STEPS.map((item, index) => (
+                <span
+                  key={item.action}
+                  className={index <= tutorialStage ? "active" : ""}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
       )}
 
       {chapterCard > 0 && mode === "playing" && (
@@ -1161,8 +1536,8 @@ export function LastBusOutGame() {
           <div className="menu-content">
             <div className="eyebrow">Original three-dimensional survival game</div>
             <h1 className="game-title">
-              Last Bus Out
-              <span>St. Orison</span>
+              Blackout
+              <span>at St. Orison</span>
             </h1>
             <p className="menu-copy">
               Wake inside a sealed hospital and descend into its containment
@@ -1173,7 +1548,10 @@ export function LastBusOutGame() {
             <div className="menu-actions">
               <button
                 className="primary-button"
-                onClick={resetRun}
+                onClick={() => {
+                  void requestLandscape();
+                  resetRun();
+                }}
                 onFocus={() => void loadGameViewport()}
                 onPointerEnter={() => void loadGameViewport()}
                 onTouchStart={() => void loadGameViewport()}
@@ -1183,7 +1561,10 @@ export function LastBusOutGame() {
               {hasSave && (
                 <button
                   className="secondary-button"
-                  onClick={continueRun}
+                  onClick={() => {
+                    void requestLandscape();
+                    continueRun();
+                  }}
                   onFocus={() => void loadGameViewport()}
                   onPointerEnter={() => void loadGameViewport()}
                   onTouchStart={() => void loadGameViewport()}
@@ -1204,6 +1585,10 @@ export function LastBusOutGame() {
               <span>E · Interact</span>
               <span>Space · Dodge</span>
             </div>
+            <p className="analytics-notice">
+              Published builds collect anonymous, cookieless gameplay metrics
+              to improve the hospital. Browser Do Not Track is respected.
+            </p>
           </div>
         </section>
       )}
@@ -1217,6 +1602,20 @@ export function LastBusOutGame() {
             <span className="loading-track" aria-hidden="true">
               <span />
             </span>
+          </div>
+        </section>
+      )}
+
+      {(mode === "intro" || mode === "tutorial" || mode === "playing") && (
+        <section className="portrait-orientation" aria-label="Landscape mode required">
+          <div className="rotate-phone" aria-hidden="true">▯</div>
+          <div>
+            <small>Touch display detected</small>
+            <h2>Rotate to landscape</h2>
+            <p>The hospital needs a wider view. Rotate your phone to continue.</p>
+            <button className="primary-button" onClick={() => void requestLandscape()}>
+              Try landscape mode
+            </button>
           </div>
         </section>
       )}
@@ -1238,7 +1637,11 @@ export function LastBusOutGame() {
             </p>
             <div className="pause-actions">
               {health > 0 && infection < 100 && (
-                <button className="primary-button" onClick={resumePlay}>
+                <button
+                  className="primary-button"
+                  onClick={resumePlay}
+                  autoFocus
+                >
                   Return to the hospital
                 </button>
               )}
@@ -1255,6 +1658,7 @@ export function LastBusOutGame() {
               {(health <= 0 || infection >= 100) && (
                 <button
                   className="primary-button"
+                  autoFocus
                   onClick={
                     chapter === "survival" ? startEndlessSurvival : resetRun
                   }
@@ -1268,6 +1672,7 @@ export function LastBusOutGame() {
                 className="secondary-button"
                 onClick={() => {
                   saveGame();
+                  endAnalyticsSession("saved-and-exited");
                   setMode("menu");
                 }}
               >
@@ -1298,6 +1703,7 @@ export function LastBusOutGame() {
               <button
                 className="primary-button"
                 onClick={startEndlessSurvival}
+                autoFocus
               >
                 Defend the quarantine annex
               </button>

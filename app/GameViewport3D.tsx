@@ -36,18 +36,21 @@ import {
 } from "./game3d/scene";
 
 type Inventory = Partial<Record<EquipmentKind, boolean>>;
+type TutorialAction = "look" | "move" | "run" | "dodge" | "perspective" | "interact";
+type ViewportMode = "menu" | "intro" | "tutorial" | "playing" | "paused" | "ending";
 
 export type PointOfView = "first" | "third";
 
 type GameViewportProps = {
   chapter: GameChapter;
-  mode: "menu" | "playing" | "paused" | "ending";
+  mode: ViewportMode;
   step: number;
   rescued: boolean;
   health: number;
   ammo: number;
   inventory: Inventory;
   pov: PointOfView;
+  tutorialStage: number;
   /** Canvas the minimap draws into. Drawn to directly, never through state. */
   minimapCanvas: HTMLCanvasElement | null;
   /** Full-screen canvas for blood thrown onto the view when the player is hit. */
@@ -79,6 +82,7 @@ type GameViewportProps = {
   onThreatProximity: (distance: number) => void;
   /** Whether the player is holding aim, so the HUD can show the mark. */
   onAimChange: (aiming: boolean) => void;
+  onTutorialAction: (action: TutorialAction) => void;
   onSound: (event: GameSoundEvent, options?: GameSoundOptions) => void;
 };
 
@@ -87,7 +91,9 @@ export type GameViewportHandle = {
   shoot: () => void;
   dodge: () => void;
   interact: () => void;
+  togglePerspective: () => void;
   captureLook: () => void;
+  releaseLook: () => void;
   setMove: (
     key: "w" | "a" | "s" | "d" | "shift",
     active: boolean,
@@ -322,7 +328,9 @@ export const GameViewport3D = forwardRef<
     shoot: () => undefined,
     dodge: () => undefined,
     interact: () => undefined,
+    togglePerspective: () => undefined,
     captureLook: () => undefined,
+    releaseLook: () => undefined,
     setMove: () => undefined,
   });
 
@@ -337,7 +345,9 @@ export const GameViewport3D = forwardRef<
       shoot: () => actionsRef.current.shoot(),
       dodge: () => actionsRef.current.dodge(),
       interact: () => actionsRef.current.interact(),
+      togglePerspective: () => actionsRef.current.togglePerspective(),
       captureLook: () => actionsRef.current.captureLook(),
+      releaseLook: () => actionsRef.current.releaseLook(),
       setMove: (key, active) => actionsRef.current.setMove(key, active),
     }),
     [],
@@ -488,6 +498,7 @@ export const GameViewport3D = forwardRef<
     flashlight.target = flashlightTarget;
     playerRoot.add(flashlight, flashlightTarget);
     let hero: AnimatedCharacter | null = null;
+    let introClock = 0;
     // Every character model is fetched before the loading screen clears, not
     // just the hero. The infected body is the one the player meets first and
     // it was previously requested only when a zombie spawned, so on a cold
@@ -500,6 +511,7 @@ export const GameViewport3D = forwardRef<
           return;
         }
         hero = character;
+        introClock = 0;
         setAnimatedEquipment(character, propsRef.current.inventory);
         playerRoot.add(character.root);
         requestAnimationFrame(() => {
@@ -535,6 +547,7 @@ export const GameViewport3D = forwardRef<
     const movement = new THREE.Vector3();
     const forward = new THREE.Vector3();
     const right = new THREE.Vector3();
+    const dodgeDirection = new THREE.Vector3();
     const enemySideways = new THREE.Vector3();
     const enemyChaseDirection = new THREE.Vector3();
     const enemyOffset = new THREE.Vector3();
@@ -559,6 +572,7 @@ export const GameViewport3D = forwardRef<
     const beamToObject = new THREE.Vector3();
     const beamForward = new THREE.Vector3();
     const lastPlayerPosition = playerRoot.position.clone();
+    const tutorialPositionBeforeMove = new THREE.Vector3();
     const livingEnemies: EnemyActor[] = [];
     let animationFrame = 0;
     let cameraYaw = 0;
@@ -828,6 +842,11 @@ export const GameViewport3D = forwardRef<
     let progressReportClock = 0;
     let pendingEncounter: (() => void) | null = null;
     let pendingEncounterClock = 0;
+    let tutorialObservedStage = -1;
+    let tutorialReportedStage = -1;
+    let tutorialLookTravel = 0;
+    let tutorialMoveTravel = 0;
+    let tutorialRunTravel = 0;
     // Routing field toward the player, rebuilt when they have moved far enough
     // for the old one to be misleading. One BFS over ~26k cells is cheap at
     // this cadence and replaces per-enemy pathfinding entirely.
@@ -851,6 +870,31 @@ export const GameViewport3D = forwardRef<
     let threatBlackoutClock = 0;
     let flashlightWasEquipped = false;
     let previousNearestThreat = 80;
+
+    const roomCentre = (room: string, fallback: THREE.Vector3) => {
+      const points = (world.spawnPoints ?? []).filter(
+        (point) => point.room === room,
+      );
+      if (points.length === 0) return fallback.clone();
+      const centre = new THREE.Vector3();
+      for (const point of points) centre.add(point.position);
+      return centre.multiplyScalar(1 / points.length);
+    };
+    const introVestibule = roomCentre("vestibule", world.start);
+    const introTriage = roomCentre(
+      "triage",
+      world.start.clone().add(new THREE.Vector3(0, 0, -10)),
+    );
+    const introNurse = roomCentre(
+      "nurse",
+      world.start.clone().add(new THREE.Vector3(7, 0, -12)),
+    );
+    const introSouth = roomCentre(
+      "southHall",
+      world.start.clone().add(new THREE.Vector3(0, 0, -22)),
+    );
+    const introCameraPosition = new THREE.Vector3();
+    const introCameraTarget = new THREE.Vector3();
     let localLightClock = 0;
     let shadowUpdateClock = 0;
     let lastRenderTime = performance.now() - 30;
@@ -1231,6 +1275,19 @@ export const GameViewport3D = forwardRef<
       }
     };
 
+    const isInteractiveMode = () => {
+      const mode = propsRef.current.mode;
+      return mode === "playing" || mode === "tutorial";
+    };
+
+    const reportTutorialAction = (action: TutorialAction) => {
+      const current = propsRef.current;
+      if (current.mode !== "tutorial") return;
+      if (tutorialReportedStage === current.tutorialStage) return;
+      tutorialReportedStage = current.tutorialStage;
+      current.onTutorialAction(action);
+    };
+
     const performAttack = () => {
       if (
         propsRef.current.mode !== "playing" ||
@@ -1350,20 +1407,47 @@ export const GameViewport3D = forwardRef<
 
     const performDodge = () => {
       if (
-        propsRef.current.mode !== "playing" ||
+        !isInteractiveMode() ||
         dodge > 0 ||
         stamina < 22
       ) {
         return;
       }
       dodge = 1;
+      forward
+        .set(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw))
+        .normalize();
+      right.crossVectors(forward, UP).normalize();
+      dodgeDirection.set(0, 0, 0);
+      if (keys.w) dodgeDirection.add(forward);
+      if (keys.s) dodgeDirection.sub(forward);
+      if (keys.d) dodgeDirection.add(right);
+      if (keys.a) dodgeDirection.sub(right);
+      // Evading from a standstill still throws the player away from danger;
+      // the old implementation multiplied a zero movement vector and appeared
+      // to do nothing when the touch button was tapped.
+      if (dodgeDirection.lengthSq() === 0) dodgeDirection.copy(forward);
+      dodgeDirection.normalize();
       stamina = Math.max(0, stamina - 22);
       propsRef.current.onStaminaChange(stamina);
       propsRef.current.onSound("dodge");
+      if (
+        propsRef.current.mode === "tutorial" &&
+        propsRef.current.tutorialStage === 3
+      ) {
+        reportTutorialAction("dodge");
+      }
     };
 
     const performInteract = () => {
-      if (propsRef.current.mode !== "playing" || !currentPrompt) return;
+      if (!isInteractiveMode() || !currentPrompt) return;
+      if (propsRef.current.mode === "tutorial") {
+        // The torch is close to the start. Collecting it before orientation
+        // reaches its interaction lesson would remove the final prompt and
+        // leave a new player unable to complete onboarding.
+        if (propsRef.current.tutorialStage !== 5) return;
+        reportTutorialAction("interact");
+      }
       propsRef.current.onInteraction(currentPrompt);
     };
 
@@ -1371,6 +1455,12 @@ export const GameViewport3D = forwardRef<
       const next = propsRef.current.pov === "first" ? "third" : "first";
       if (next === "third" && isPointerLocked()) document.exitPointerLock();
       propsRef.current.onPovChange(next);
+      if (
+        propsRef.current.mode === "tutorial" &&
+        propsRef.current.tutorialStage === 4
+      ) {
+        reportTutorialAction("perspective");
+      }
     };
 
     actionsRef.current = {
@@ -1378,9 +1468,13 @@ export const GameViewport3D = forwardRef<
       shoot: performShoot,
       dodge: performDodge,
       interact: performInteract,
+      togglePerspective: togglePov,
       // Wrapped rather than passed directly: requestPointerLock is declared
       // further down, so a bare reference here would hit the temporal dead zone.
       captureLook: () => requestPointerLock(),
+      releaseLook: () => {
+        if (isPointerLocked()) document.exitPointerLock();
+      },
       setMove: (key, active) => {
         keys[key] = active;
       },
@@ -1406,6 +1500,7 @@ export const GameViewport3D = forwardRef<
       ) {
         event.preventDefault();
       }
+      if (!isInteractiveMode()) return;
       keys[key] = true;
       if (key === "f") performAttack();
       if (key === "g") performShoot();
@@ -1424,6 +1519,7 @@ export const GameViewport3D = forwardRef<
 
     const requestPointerLock = () => {
       if (coarsePointer) return;
+      if (!isInteractiveMode()) return;
       if (isPointerLocked()) return;
       // Chrome returns a Promise here while the DOM lib still types it void, and
       // it rejects if the browser is still throttling a recent Escape exit.
@@ -1443,6 +1539,7 @@ export const GameViewport3D = forwardRef<
     };
 
     const pointerDown = (event: PointerEvent) => {
+      if (!isInteractiveMode()) return;
       // Right button raises the pistol. Left fires while aiming, so the whole
       // thing works from the mouse without reaching for a key.
       if (event.button === 2) {
@@ -1475,6 +1572,13 @@ export const GameViewport3D = forwardRef<
       }
       const dx = locked ? event.movementX : event.clientX - dragPointer!.x;
       const dy = locked ? event.movementY : event.clientY - dragPointer!.y;
+      if (
+        propsRef.current.mode === "tutorial" &&
+        propsRef.current.tutorialStage === 0
+      ) {
+        tutorialLookTravel += Math.abs(dx) + Math.abs(dy);
+        if (tutorialLookTravel >= 90) reportTutorialAction("look");
+      }
       if (propsRef.current.pov === "first") {
         // Raw pointer-lock deltas run about 1.6x a drag delta, so first person
         // uses a lower coefficient to land on a comparable feel.
@@ -1668,7 +1772,11 @@ export const GameViewport3D = forwardRef<
         current.onWaveWarning(0, warning);
       };
 
-      if (current.chapter === "hospital" && current.step === 3) {
+      if (
+        current.chapter === "hospital" &&
+        current.step === 3 &&
+        current.inventory.axe
+      ) {
         // Room-relative now that Ground Emergency is a room graph rather than a
         // corridor: the old absolute coordinates sat outside the new footprint.
         arm(() => {
@@ -1676,7 +1784,11 @@ export const GameViewport3D = forwardRef<
           spawnEnemyInRoom("runner", "bayB", 1.8, -1.2);
           spawnEnemyInRoom("walker", "nurse", 1.4, -1.8);
         });
-      } else if (current.chapter === "hospital" && current.step === 5) {
+      } else if (
+        current.chapter === "hospital" &&
+        current.step === 5 &&
+        current.inventory.axe
+      ) {
         // Nothing spawns in the stairwell: it is the room the player has to
         // reach to finish the floor, and an enemy parked in it behind a closed
         // door is exactly what used to wedge and stall the encounter.
@@ -1797,6 +1909,63 @@ export const GameViewport3D = forwardRef<
       }
     };
 
+    const updateIntroCamera = (delta: number) => {
+      introClock += delta;
+      const shotLength = 2.9;
+      const shot = Math.min(4, Math.floor(introClock / shotLength));
+      const raw = (introClock % shotLength) / shotLength;
+      const progress = raw * raw * (3 - 2 * raw);
+      const drift = Math.sin(introClock * 0.55) * 0.08;
+
+      if (shot === 0) {
+        introCameraPosition.set(
+          introVestibule.x - 4.6 + progress * 1.8,
+          1.5 + drift,
+          introVestibule.z + 2.6 - progress * 3.1,
+        );
+        introCameraTarget.set(
+          introVestibule.x,
+          1.15,
+          introVestibule.z - 4.8,
+        );
+      } else if (shot === 1) {
+        introCameraPosition.set(
+          introTriage.x + 4.7 - progress * 1.4,
+          1.62 + drift,
+          introTriage.z + 3.8 - progress * 4.4,
+        );
+        introCameraTarget.set(introTriage.x - 1.2, 1.1, introTriage.z - 2.8);
+      } else if (shot === 2) {
+        introCameraPosition.set(
+          introNurse.x - 3.4 + progress * 2.1,
+          1.48 + drift,
+          introNurse.z + 2.6 - progress * 1.7,
+        );
+        introCameraTarget.set(introNurse.x, 1.05, introNurse.z - 1.8);
+      } else if (shot === 3) {
+        introCameraPosition.set(
+          introSouth.x + 3.8 - progress * 5.9,
+          1.42 + drift,
+          introSouth.z + 2.3 - progress * 1.1,
+        );
+        introCameraTarget.set(introSouth.x, 1.05, introSouth.z - 3.5);
+      } else {
+        introCameraPosition.set(
+          playerRoot.position.x + 3.2 - progress * 0.8,
+          playerRoot.position.y + 1.62 + drift,
+          playerRoot.position.z + 3.6 - progress * 0.7,
+        );
+        introCameraTarget.copy(playerRoot.position).setY(1.05);
+      }
+
+      camera.position.lerp(
+        introCameraPosition,
+        1 - Math.exp(-delta * (raw < 0.08 ? 16 : 4.8)),
+      );
+      camera.lookAt(introCameraTarget);
+      if (hero) updateAnimatedCharacter(hero, delta, "idle");
+    };
+
     const animate = (timestamp = performance.now()) => {
       animationFrame = requestAnimationFrame(animate);
       if (document.hidden) {
@@ -1805,9 +1974,12 @@ export const GameViewport3D = forwardRef<
         return;
       }
       const current = propsRef.current;
-      const frameInterval =
-        current.mode === "playing"
-          ? 1000 / (coarsePointer ? 36 : 48)
+      const interactiveMode =
+        current.mode === "playing" || current.mode === "tutorial";
+      const frameInterval = interactiveMode
+        ? 1000 / (coarsePointer ? 36 : 48)
+        : current.mode === "intro"
+          ? 1000 / 30
           : 1000 / 10;
       const timeSinceRender = timestamp - lastRenderTime;
       if (timeSinceRender < frameInterval) return;
@@ -1820,7 +1992,22 @@ export const GameViewport3D = forwardRef<
       updateLocalLightBudget(delta);
       syncWorldState(time, delta);
 
-      if (current.mode === "playing") {
+      if (current.mode === "intro") {
+        updateIntroCamera(delta);
+        renderer.render(scene, camera);
+        return;
+      }
+
+      if (interactiveMode) {
+        if (
+          current.mode === "tutorial" &&
+          tutorialObservedStage !== current.tutorialStage
+        ) {
+          tutorialObservedStage = current.tutorialStage;
+          tutorialLookTravel = 0;
+          tutorialMoveTravel = 0;
+          tutorialRunTravel = 0;
+        }
         if (keys.q) cameraYaw += delta * 1.4;
         if (keys.r) cameraYaw -= delta * 1.4;
         forward
@@ -1833,6 +2020,7 @@ export const GameViewport3D = forwardRef<
         if (keys.d) movement.add(right);
         if (keys.a) movement.sub(right);
         if (movement.lengthSq() > 0) movement.normalize();
+        if (dodge > 0) movement.copy(dodgeDirection);
 
         const moving = movement.lengthSq() > 0;
         // Sprint needs headroom to start, so it cannot flicker on and off at
@@ -1858,8 +2046,9 @@ export const GameViewport3D = forwardRef<
         if (attack > 0) {
           movementSpeed *= current.inventory.axe ? 0.52 : 0.7;
         }
-        if (dodge > 0) movementSpeed *= 2.25;
+        if (dodge > 0) movementSpeed *= 2.75;
         const travel = movementSpeed * delta;
+        tutorialPositionBeforeMove.copy(playerRoot.position);
         if (moving) {
           const nextX = playerRoot.position.x + movement.x * travel;
           const nextZ = playerRoot.position.z + movement.z * travel;
@@ -1876,6 +2065,19 @@ export const GameViewport3D = forwardRef<
               targetRotation,
               Math.min(1, delta * 11),
             );
+          }
+        }
+
+        if (current.mode === "tutorial") {
+          const travelled = playerRoot.position.distanceTo(
+            tutorialPositionBeforeMove,
+          );
+          if (current.tutorialStage === 1) {
+            tutorialMoveTravel += travelled;
+            if (tutorialMoveTravel >= 1.5) reportTutorialAction("move");
+          } else if (current.tutorialStage === 2 && running) {
+            tutorialRunTravel += travelled;
+            if (tutorialRunTravel >= 2) reportTutorialAction("run");
           }
         }
 
@@ -2305,7 +2507,7 @@ export const GameViewport3D = forwardRef<
             horrorPulse = Math.max(horrorPulse, 2.4);
           }
 
-          if (distance < 1.45 && enemy.attackClock <= 0) {
+          if (distance < 1.45 && enemy.attackClock <= 0 && dodge <= 0) {
             enemy.attackClock =
               enemy.character?.style === "runner"
                 ? 0.82
@@ -2441,6 +2643,7 @@ export const GameViewport3D = forwardRef<
         // and the curtain scare on committing to the south link.
         const scareKey =
           current.chapter === "hospital" &&
+          current.inventory.axe &&
           current.step >= 3 &&
           playerRoot.position.z < -10
             ? "hospital-curtain"
@@ -2906,14 +3109,21 @@ export const GameViewport3D = forwardRef<
           }
         }
 
-    // Wandering infected, independent of the scripted encounters.
+        // Wandering infected, independent of the scripted encounters.
         //
         // Every threat used to arrive on a step change, so once a floor's
         // encounter was cleared it was empty and safe. A slow trickle from
         // random rooms the player cannot currently see means no corridor is
         // ever reliably clear, and it is the cheapest way to make a floor stop
         // feeling like a checklist.
-        if (world.spawnPoints && world.spawnPoints.length > 0) {
+        const infectedAllowed =
+          current.chapter !== "hospital" || Boolean(current.inventory.axe);
+        if (
+          current.mode === "playing" &&
+          infectedAllowed &&
+          world.spawnPoints &&
+          world.spawnPoints.length > 0
+        ) {
           roamClock -= delta;
           if (roamClock <= 0) {
             roamClock = 26 + Math.random() * 34;

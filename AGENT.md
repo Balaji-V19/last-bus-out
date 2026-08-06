@@ -1,4 +1,4 @@
-# Last Bus Out implementation and 3D model guide
+# Blackout at St. Orison implementation and 3D model guide
 
 This file is the detailed build contract for developers and coding agents. The
 short repository-wide rules are in `AGENTS.md`; product and setup information
@@ -295,4 +295,3 @@ A change is complete only when:
   combat, lighting, and layout.
 - No local server or Blender process is left running.
 - Nothing is pushed or deployed without explicit current authorization.
-

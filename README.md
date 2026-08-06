@@ -1,7 +1,7 @@
-# Last Bus Out: St. Orison
+# Blackout at St. Orison
 
-Last Bus Out is a third-person 3D hospital-horror game that runs in a modern
-browser. The current campaign never leaves St. Orison Hospital. The player
+Blackout at St. Orison is a third-person 3D hospital-horror game that runs in a
+modern browser. The current campaign never leaves St. Orison Hospital. The player
 moves between sealed floors, searches for survivors and supplies, restores
 critical systems, fights infected patients and research mutations, and tries
 to reach Shelter 04 before infection reaches 100%.
@@ -30,6 +30,13 @@ hospital interior.
 
 ## Gameplay systems
 
+- A first-run in-engine cinematic moves through the live Ground Emergency
+  floor, establishes the story, and hands control to a six-step orientation.
+  The orientation verifies camera look, walking, running, dodging, perspective,
+  and interaction in the real hospital rather than on a separate help screen.
+- Ground Floor infected remain dormant until the player finishes orientation,
+  finds the torch and radio, and picks up the fire axe. Scripted scares, roaming
+  infected, and the opening encounter all share this inventory gate.
 - Third-person locomotion with idle, walk, run, attack, attack-run, shoot, hit,
   and death animation states.
 - Fire-axe melee, a recoverable service pistol, dodging, hit reactions, blood
@@ -61,14 +68,20 @@ hospital interior.
 | `Shift` | Run |
 | Drag | Look around |
 | Mouse wheel | Adjust third-person camera distance |
+| `V` | Switch between first- and third-person view |
 | `F` | Axe attack |
 | `G` | Fire the pistol after it is found |
 | `Space` | Dodge |
 | `E` | Interact |
 | `Escape` | Pause or resume |
 
-Touch movement and action controls appear automatically on coarse-pointer
-devices.
+Touch devices use a clear-screen control layout in landscape. Drag anywhere in
+the invisible left movement zone to walk in that direction; drag farther to
+run. Drag the unobstructed right side to look. Compact Attack, Use, Evade, View,
+and pistol actions stay at the right edge, while the pack expands only when
+tapped. Evade now lunges in the current direction (forward from a standstill)
+and briefly prevents infected attacks. In portrait, the game requests landscape
+mode where the browser permits it and otherwise asks the player to rotate.
 
 ## Run locally
 
@@ -186,7 +199,7 @@ npx tsc --noEmit
 ### Static deployment
 
 - `static-game/main.tsx` mounts the same React game for a Vite static build.
-- `vite.pages.config.ts` builds with the `/last-bus-out/` base path.
+- `vite.pages.config.ts` builds with the `/blackout-at-st-orison/` base path.
 - `.github/workflows/deploy-pages.yml` builds and deploys only after a push to
   `main` (or a manual workflow run).
 - No local development command deploys the game.
@@ -250,15 +263,58 @@ front, back, and both side views.
 
 The repository workflow publishes after a successful push to `main`:
 
-<https://balaji-v19.github.io/last-bus-out/>
+<https://balaji-v19.github.io/blackout-at-st-orison/>
 
 Deployment should remain branch-driven. Do not deploy directly from a local
 agent session unless the repository owner explicitly requests it.
 
+## Anonymous gameplay analytics
+
+Published Pages builds can use [Umami](https://umami.is/) for anonymous,
+cookieless analytics. The tracker is not included in local development or in a
+Pages build unless `UMAMI_WEBSITE_ID` is configured. Browser Do Not Track is
+respected, Core Web Vitals are enabled, and no player name, email address,
+save contents, precise movement, or free-form text is sent.
+
+The game records a deliberately small event set:
+
+| Event | Purpose |
+| --- | --- |
+| `game-started` | New, continued, or endless runs |
+| `orientation-completed` | First-time control onboarding completion |
+| `floor-entered` | Campaign progression and floor drop-off |
+| `objective-completed` | Objective progression and blockers |
+| `game-over` | Health or infection failure points |
+| `story-completed` | Main-campaign completion |
+| `game-session-heartbeat` | One active-play sample per minute for playtime |
+| `game-session-ended` / `game-session-checkpoint` | Active seconds and final run state |
+
+To enable it:
+
+1. Create an Umami Cloud website or self-host Umami.
+2. In the GitHub repository, open **Settings → Secrets and variables → Actions
+   → Variables**.
+3. Add `UMAMI_WEBSITE_ID` with the website UUID.
+4. Optionally add `UMAMI_SCRIPT_URL` for a self-hosted tracker. Without it, the
+   build uses `https://cloud.umami.is/script.js`.
+5. Optionally add `UMAMI_DOMAINS` with a comma-separated hostname allowlist,
+   such as `balaji-v19.github.io` or a future custom domain.
+6. Push normally to `main`; the Pages workflow injects the tracker at build
+   time. The website ID is a public client identifier, not a secret.
+
+Use Umami funnels to measure `game-started → orientation-completed →
+floor-entered → story-completed`. Use the heartbeat and session-ending event's
+`active_seconds` property for real playtime; this excludes time spent in a
+background tab or pause screen. Source posts should use distinct UTM links so
+their traffic and completion quality can be compared. See `ANALYTICS.md` for
+the complete setup and dashboard guide, and `PRIVACY.md` before changing
+providers or adding new data.
+
 ## Ownership and licensing
 
 Project code, procedural environment geometry, equipment geometry, mutation
-additions, gameplay logic, and presentation were created for Last Bus Out.
+additions, gameplay logic, and presentation were created for Blackout at St.
+Orison.
 Character anatomy/animation bases and the music loop use documented CC0
 sources. See `public/models/THIRD_PARTY.md` for exact creators, source URLs,
 licenses, and local modifications.

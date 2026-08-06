@@ -1,6 +1,6 @@
 # Claude project instructions
 
-This repository contains **Last Bus Out: St. Orison**, a browser-based
+This repository contains **Blackout at St. Orison**, a browser-based
 third-person hospital-horror game. Read `README.md`, `AGENT.md`, and
 `public/models/THIRD_PARTY.md` before making story, character, asset, or
 deployment changes.
@@ -21,6 +21,10 @@ deployment changes.
   2, Basement B1, Floor 3, Floor 4, and the Ground Floor Safe Wing.
 - Objective interaction IDs must agree in `scene.ts`, `GameViewport3D.tsx`,
   and `LastBusOutGame.tsx`.
+- A new run begins with the in-engine hospital cinematic and the interactive
+  orientation. Do not allow any Ground Floor infected spawn path to run until
+  the fire axe is in inventory; this includes scripted encounters, scares, and
+  the roaming director.
 
 ## Development rules
 
@@ -28,6 +32,16 @@ deployment changes.
 - Keep TypeScript strict and avoid `any` unless an external boundary makes it
   unavoidable.
 - Preserve lazy viewport loading and the existing low-power renderer settings.
+- Keep analytics lazy and production-only. Do not add analytics packages to the
+  initial game bundle, emit per-frame events, or let a tracker failure affect
+  gameplay.
+- Analytics must remain anonymous: no names, emails, persistent player IDs,
+  save payloads, free-form text, or precise movement traces. Respect browser Do
+  Not Track and update `PRIVACY.md` when the event schema or provider changes.
+- Preserve the clear-screen touch contract: portrait is gated, left-side drag
+  controls movement and run distance without visible direction buttons, right
+  side drag controls the camera, actions stay compact at the right edge, and
+  inventory remains collapsed until requested.
 - Avoid per-frame React state updates. Run movement, animation, lighting,
   particles, and enemy AI inside the Three.js update loop; report UI values at
   a throttled cadence.
@@ -77,4 +91,3 @@ room-graph floor plan or to the floor compiler requires `validate:floors`.
   `.github/workflows/deploy-pages.yml`.
 - A request to implement locally does not authorize a push.
 - Keep commits focused and describe user-visible gameplay changes.
-
